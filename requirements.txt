@@ -1,0 +1,6 @@
+streamlit
+pandas
+google-generativeai
+Pillow
+pypdf
+pdf2image
