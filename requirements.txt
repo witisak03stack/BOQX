@@ -1,7 +1,6 @@
 streamlit
 pandas
 openpyxl
-google-generativeai
 Pillow
-pypdf
-pdf2image
+PyMuPDF
+pytesseract
