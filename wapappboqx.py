@@ -148,6 +148,12 @@ if "beam_rebars" not in st.session_state:
         {"pos": "เหล็กปลอก", "type": "RB6", "mode": "ระยะห่าง (@ ม.)", "val": 0.15, "len": 1.20}
     ]
 
+if "slab_rebars" not in st.session_state:
+    st.session_state["slab_rebars"] = [
+        {"pos": "เหล็กล่าง/ตะแกรงทางยาว", "type": "RB9", "mode": "ระยะห่าง (@ ม.)", "val": 0.20, "len": 4.00},
+        {"pos": "เหล็กล่าง/ตะแกรงทางกว้าง", "type": "RB9", "mode": "ระยะห่าง (@ ม.)", "val": 0.20, "len": 3.00}
+    ]
+
 def get_current_project_index():
     projects = st.session_state.get("projects", [])
     if not projects:
@@ -177,7 +183,7 @@ def add_takeoff_item(item_data):
 # 4. Sidebar Price & Material Settings
 # ---------------------------------------------------------
 with st.sidebar:
-    st.title("⚙️ ตั้งค่าราคาและค่าแรง")
+    st.title("⚙️️ ตั้งค่าราคาและค่าแรง")
     
     with st.expander("💼 ค่าดำเนินการ กำไร & ภาษี", expanded=True):
         profit_percent = st.number_input("ค่าดำเนินการ & กำไร (%)", value=10.0, step=1.0) / 100.0
@@ -693,7 +699,7 @@ with tabs[3]:
         })
 
 # =========================================================
-# TAB 5: 🧱 พื้น
+# TAB 5: 🧱 พื้น (แก้ไขการเสริมเหล็กแบบไดนามิก)
 # =========================================================
 with tabs[4]:
     st.subheader(f"🧱 ถอดปริมาณงานพื้น — [{active_proj_name}]")
@@ -706,31 +712,87 @@ with tabs[4]:
     slab_l = sm2.number_input("ความยาวพื้น (เมตร)", value=4.00, step=0.10, key="s_l")
     slab_h = sm3.number_input("ความหนาพื้น (เมตร)", value=0.10, step=0.01, key="s_h")
 
-    st.markdown("#### 🥞 เหล็กเสริมพื้น (ตะแกรง)")
-    s_re1, s_re2 = st.columns(2)
-    s_rebar_type = s_re1.selectbox("ขนาดเหล็กเสริมพื้น", REBAR_LIST, index=1, key="s_rebar_type")
-    s_rebar_spacing = s_re2.number_input("ระยะห่าง @ (เมตร)", value=0.20, step=0.01, key="s_rebar_spacing")
+    st.markdown("---")
+    head_s, btn_s = st.columns([3, 1])
+    head_s.markdown("#### 🥞 เหล็กเสริมพื้น (สามารถเพิ่มรายการเหล็กเสริมได้หลายชั้น)")
 
+    if btn_s.button("➕ เพิ่มรายการเหล็กพื้น", key="btn_add_s_rebar"):
+        st.session_state["slab_rebars"].append({"pos": "เหล็กเสริม", "type": "RB9", "mode": "ระยะห่าง (@ ม.)", "val": 0.20, "len": slab_l})
+        st.rerun()
+
+    s_rebars_to_remove = []
+    tot_slab_rebar_weight = 0.0
+    slab_rebar_detail = {}
+    slab_pos_options = [
+        "เหล็กล่าง/ตะแกรงทางยาว", 
+        "เหล็กล่าง/ตะแกรงทางกว้าง", 
+        "เหล็กบน/ตะแกรงทางยาว", 
+        "เหล็กบน/ตะแกรงทางกว้าง", 
+        "เหล็กคอมเมนท์/เหล็กเสริมพิเศษ", 
+        "ตะแกรงเหล็กสำเร็จรูป (Wire Mesh)"
+    ]
+
+    for idx, r in enumerate(st.session_state["slab_rebars"]):
+        c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1.2, 1.8, 1.5, 1.5, 0.5])
+        
+        pos_idx = slab_pos_options.index(r["pos"]) if r["pos"] in slab_pos_options else 0
+        r["pos"] = c1.selectbox(f"ตำแหน่ง #{idx+1}", slab_pos_options, index=pos_idx, key=f"s_pos_{idx}")
+        
+        type_idx = REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 1
+        r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=type_idx, key=f"s_type_{idx}")
+        
+        mode_idx = 0 if r["mode"] == "จำนวน (เส้น)" else 1
+        r["mode"] = c3.selectbox(f"จำนวน/ระยะห่าง #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=mode_idx, key=f"s_mode_{idx}")
+        
+        r["val"] = c4.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"s_val_{idx}")
+        
+        if r["len"] <= 0:
+            r["len"] = slab_l
+
+        r["len"] = c5.number_input(f"ยาว (ม.) #{idx+1}", value=float(r["len"]), key=f"s_len_{idx}")
+        
+        if c6.button("🗑", key=f"del_s_rebar_{idx}"):
+            s_rebars_to_remove.append(idx)
+
+        if r["mode"] == "จำนวน (เส้น)":
+            total_len_row = r["val"] * r["len"]
+        else:
+            calc_count = (math.ceil(slab_w / r["val"]) + 1) if r["val"] > 0 else 0
+            total_len_row = calc_count * r["len"]
+        
+        w_row = total_len_row * REBAR_WEIGHT[r["type"]]
+        tot_slab_rebar_weight += w_row
+        slab_rebar_detail[r["type"]] = slab_rebar_detail.get(r["type"], 0.0) + w_row
+
+    if s_rebars_to_remove:
+        st.session_state["slab_rebars"] = [item for i, item in enumerate(st.session_state["slab_rebars"]) if i not in s_rebars_to_remove]
+        st.rerun()
+
+    st.markdown("---")
     if st.button("➕ บันทึกงานพื้น", type="primary", key="btn_save_slab"):
         area = slab_w * slab_l * slab_qty
         vol = (area * slab_h) * (1 + waste_concrete)
         form = area * (1 + waste_formwork)
+        rebar_weight = tot_slab_rebar_weight * slab_qty * (1 + waste_rebar)
 
-        num_bars_w = math.ceil(slab_l / s_rebar_spacing) + 1
-        num_bars_l = math.ceil(slab_w / s_rebar_spacing) + 1
-        total_slab_rebar_len = ((num_bars_w * slab_w) + (num_bars_l * slab_l)) * slab_qty
-        rebar_weight = total_slab_rebar_len * REBAR_WEIGHT[s_rebar_type] * (1 + waste_rebar)
+        tot_rebar_mat_cost = 0.0
+        rebar_breakdown = {}
 
-        p_s_rebar = p_db12 if "DB" in s_rebar_type else p_rb9
-        mat_c = vol * p_concrete + rebar_weight * p_s_rebar + form * p_formwork
+        for r_type, w_base in slab_rebar_detail.items():
+            w_tot = w_base * slab_qty * (1 + waste_rebar)
+            rebar_breakdown[r_type] = round(w_tot, 2)
+            p_s = p_db12 if "DB" in r_type else p_rb9
+            tot_rebar_mat_cost += w_tot * p_s
+
+        mat_c = vol * p_concrete + tot_rebar_mat_cost + form * p_formwork
         lab_c = vol * labour_concrete + rebar_weight * labour_rebar + form * labour_formwork
 
-        rebar_breakdown = {s_rebar_type: round(rebar_weight, 2)}
+        rebar_desc = ", ".join([f"{k}: {v:.1f} กก." for k, v in rebar_breakdown.items()]) if rebar_breakdown else "ไม่ใส่เหล็กเสริม"
 
         add_takeoff_item({
             "หมวด": "งานพื้น",
             "รายการ": slab_name,
-            "รายละเอียด": f"ขนาด {slab_w:.2f}x{slab_l:.2f}ม. หนา {slab_h:.2f}ม. | เหล็ก {s_rebar_type}@{s_rebar_spacing:.2f}ม.",
+            "รายละเอียด": f"ขนาด {slab_w:.2f}x{slab_l:.2f}ม. หนา {slab_h:.2f}ม. ({slab_qty} ผืน) | เหล็กเสริม: {rebar_desc}",
             "จำนวน": slab_qty,
             "คอนกรีต (ลบ.ม.)": round(vol, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
