@@ -9,7 +9,7 @@ import os
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V6.7 (Audited)",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V6.8 (Accuracy Audited)",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -95,16 +95,41 @@ def safe_num(value, default=0.0):
     except (TypeError, ValueError):
         return float(default)
 
+def with_waste(net_qty, waste_pct):
+    """คำนวณปริมาณจัดซื้อ = ปริมาณสุทธิ x (1 + Waste)"""
+    return max(0.0, safe_num(net_qty)) * (1.0 + max(0.0, safe_num(waste_pct)))
+
+def count_by_spacing(span, spacing):
+    """นับจำนวนเส้นจากระยะ @ โดยยึดปลาย 2 ด้าน: ceil(span/@)+1"""
+    span = max(0.0, safe_num(span))
+    spacing = safe_num(spacing)
+    if spacing <= 0 or span <= 0:
+        return 0
+    return math.ceil(span / spacing) + 1
+
 def sum_rebar_breakdown(items):
-    """รวมเหล็กแยกชนิดจากรายการ BOQ ทั้งหมด"""
+    """รวมเหล็กเสริมแยกชนิด (ไม่รวมโครงเหล็กหลังคา)"""
     totals = {}
     for item in items or []:
         breakdown = item.get("เหล็กแยกชนิด", {})
         if not isinstance(breakdown, dict):
             continue
         for rebar_type, weight in breakdown.items():
+            if str(rebar_type) == "โครงเหล็กหลังคา":
+                continue
             totals[rebar_type] = totals.get(rebar_type, 0.0) + safe_num(weight)
     return totals
+
+def sum_structural_steel(items):
+    """รวมโครงเหล็กหลังคาแยกจากเหล็กเสริม คสล."""
+    total = 0.0
+    for item in items or []:
+        breakdown = item.get("เหล็กแยกชนิด", {})
+        if isinstance(breakdown, dict):
+            total += safe_num(breakdown.get("โครงเหล็กหลังคา", 0.0))
+        elif item.get("หมวด") == "งานหลังคา":
+            total += safe_num(item.get("เหล็ก (กก.)", 0.0))
+    return total
 
 # รายการทรงหลังคา และ Slope Factor ประเมิน
 ROOF_SHAPE_FACTORS = {
@@ -167,6 +192,19 @@ def load_projects():
             p.setdefault("items", [])
             if not isinstance(p["items"], list):
                 p["items"] = []
+            normalized_items = []
+            for item in p["items"]:
+                if not isinstance(item, dict):
+                    continue
+                q = dict(item)
+                # รองรับข้อมูลเก่าที่ไม่มีคอลัมน์ใหม่
+                q.setdefault("คอนกรีตสุทธิ (ลบ.ม.)", None)
+                q.setdefault("เหล็กสุทธิ (กก.)", None)
+                q.setdefault("ไม้แบบสุทธิ (ตร.ม.)", None)
+                q.setdefault("ข้อมูลปริมาณสุทธิแยกจาก Waste", False)
+                q.setdefault("รวมเงิน (บาท)", safe_num(q.get("ค่าวัสดุ (บาท)", 0.0)) + safe_num(q.get("ค่าแรง (บาท)", 0.0)))
+                normalized_items.append(q)
+            p["items"] = normalized_items
             valid.append(p)
         return valid
     except Exception as e:
@@ -193,8 +231,8 @@ if "current_project_id" not in st.session_state:
 
 if "footing_rebars" not in st.session_state:
     st.session_state["footing_rebars"] = [
-        {"type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50},
-        {"type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50}
+        {"pos": "เหล็กวิ่งตามยาว", "type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50},
+        {"pos": "เหล็กวิ่งตามกว้าง", "type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50}
     ]
 
 if "column_rebars" not in st.session_state:
@@ -236,9 +274,17 @@ def add_takeoff_item(item_data):
     if p_idx != -1:
         if "items" not in st.session_state["projects"][p_idx]:
             st.session_state["projects"][p_idx]["items"] = []
-        st.session_state["projects"][p_idx]["items"].append(item_data)
+        item = dict(item_data)
+        item.setdefault("คอนกรีตสุทธิ (ลบ.ม.)", safe_num(item.get("คอนกรีต (ลบ.ม.)", 0.0)))
+        item.setdefault("เหล็กสุทธิ (กก.)", safe_num(item.get("เหล็ก (กก.)", 0.0)))
+        item.setdefault("ไม้แบบสุทธิ (ตร.ม.)", safe_num(item.get("ไม้แบบ (ตร.ม.)", 0.0)))
+        item["ข้อมูลปริมาณสุทธิแยกจาก Waste"] = True
+        item["รวมเงิน (บาท)"] = round(
+            safe_num(item.get("ค่าวัสดุ (บาท)", 0.0)) + safe_num(item.get("ค่าแรง (บาท)", 0.0)), 2
+        )
+        st.session_state["projects"][p_idx]["items"].append(item)
         save_projects()  # บันทึกลงดิสก์อัตโนมัติ
-        st.success(f"บันทึกรายการ '{item_data['รายการ']}' เรียบร้อยแล้ว!")
+        st.success(f"บันทึกรายการ '{item.get('รายการ', 'ไม่ระบุ')}' เรียบร้อยแล้ว!")
     else:
         st.error("⚠ กรุณาสร้างหรือเลือกโครงการก่อนทำการบันทึกข้อมูล!")
 
@@ -282,6 +328,8 @@ with st.sidebar:
         p_rb9 = st.number_input("เหล็ก RB6/RB9/โครงสร้าง (บาท/กก.)", min_value=0.0, value=33.0, step=0.5)
         p_formwork = st.number_input("ไม้แบบ (บาท/ตร.ม.)", min_value=0.0, value=380.0, step=10.0)
         p_roof_cap = st.number_input("ครอบสันหลังคา/ตะเข้สัน (บาท/เมตร)", min_value=0.0, value=180.0, step=10.0)
+        p_roof_steel = st.number_input("โครงเหล็กหลังคา (บาท/กก.)", min_value=0.0, value=42.0, step=0.5)
+        labour_roof_steel = st.number_input("ค่าแรงประกอบโครงเหล็กหลังคา (บาท/กก.)", min_value=0.0, value=12.0, step=0.5)
 
     with st.expander("📌 ราคาและค่าแรงเสาเข็ม", expanded=False):
         p_pile_hex = st.number_input("เข็มหกเหลี่ยมกลวง (บาท/ม.)", min_value=0.0, value=120.0, step=10.0)
@@ -352,7 +400,7 @@ ceiling_price_map = {
 # ---------------------------------------------------------
 st.markdown(f"""
 <div class="header-banner">
-    <div class="header-title">⚙️ ระบบถอดปริมาณงานโครงสร้าง & สถาปัตย์ (Takeoff V6.7)</div>
+    <div class="header-title">⚙️ ระบบถอดปริมาณงานโครงสร้าง & สถาปัตย์ (Takeoff V6.8)</div>
     <div class="header-subtitle">📁 โครงการปัจจุบัน: <b>{active_proj_name}</b></div>
 </div>
 """, unsafe_allow_html=True)
@@ -487,10 +535,14 @@ with tabs[1]:
     f_type = f3.radio("ประเภทฐานราก", ["ฐานรากแผ่ (Shallow)", "ฐานรากมีเสาเข็ม (Piled)"], key="f_type")
 
     m1, m2, m3, m4 = st.columns(4)
-    f_w = m1.number_input("ความกว้างฐานราก (เมตร)", value=1.20, step=0.1, key="f_w")
-    f_l = m2.number_input("ความยาวฐานราก (เมตร)", value=1.20, step=0.1, key="f_l")
-    f_h = m3.number_input("ความหนาฐานราก (เมตร)", value=0.35, step=0.05, key="f_h")
-    f_depth = m4.number_input("ระดับความลึกดินขุด H (เมตร)", value=1.50, step=0.1, key="f_depth")
+    f_w = m1.number_input("ความกว้างฐานราก (เมตร)", min_value=0.05, value=1.20, step=0.1, key="f_w")
+    f_l = m2.number_input("ความยาวฐานราก (เมตร)", min_value=0.05, value=1.20, step=0.1, key="f_l")
+    f_h = m3.number_input("ความหนาฐานราก (เมตร)", min_value=0.05, value=0.35, step=0.05, key="f_h")
+    f_depth = m4.number_input("ระดับความลึกดินขุด H (เมตร)", min_value=0.05, value=1.50, step=0.1, key="f_depth")
+
+    ex1, ex2 = st.columns(2)
+    f_work_space = ex1.number_input("ระยะเผื่อพื้นที่ทำงานรอบหลุมขุด / ด้าน (เมตร)", min_value=0.0, value=0.30, step=0.05, key="f_work_space")
+    f_form_type = ex2.selectbox("แบบหล่อด้านข้างฐานราก", ["เทชิดดิน / ไม่คิดไม้แบบข้าง", "มีไม้แบบข้างฐานราก"], key="f_form_type")
 
     if "เสาเข็ม" in f_type:
         st.markdown("#### 📌 รายละเอียดเสาเข็ม")
@@ -503,7 +555,7 @@ with tabs[1]:
     head_col, btn_col = st.columns([3, 1])
     head_col.markdown("#### 🥞 เหล็กเสริมฐานราก")
     if btn_col.button("➕ เพิ่มรายการเหล็ก", key="btn_add_f_rebar"):
-        st.session_state["footing_rebars"].append({"type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50})
+        st.session_state["footing_rebars"].append({"pos": "เหล็กวิ่งตามยาว", "type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50})
         st.rerun()
 
     f_rebars_to_remove = []
@@ -511,19 +563,22 @@ with tabs[1]:
     footing_rebar_detail = {}
 
     for idx, r in enumerate(st.session_state["footing_rebars"]):
-        c1, c2, c3, c4, c5 = st.columns([1.5, 2, 2, 2, 0.5])
-        r["type"] = c1.selectbox(f"ชนิดเหล็ก #{idx+1}", REBAR_LIST, index=REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 2, key=f"f_type_{idx}")
-        r["mode"] = c2.selectbox(f"จำนวน/ระยะห่าง #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r["mode"] == "จำนวน (เส้น)" else 1, key=f"f_mode_{idx}")
-        r["val"] = c3.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"f_val_{idx}")
-        r["len"] = c4.number_input(f"ยาว (ม.) #{idx+1}", value=float(r["len"]), key=f"f_len_{idx}")
+        c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1.5, 2, 2, 2, 0.5])
+        footing_pos_options = ["เหล็กวิ่งตามยาว", "เหล็กวิ่งตามกว้าง", "เหล็กเสริมพิเศษ"]
+        r["pos"] = c1.selectbox(f"แนวเหล็ก #{idx+1}", footing_pos_options, index=footing_pos_options.index(r.get("pos", "เหล็กวิ่งตามยาว")) if r.get("pos", "เหล็กวิ่งตามยาว") in footing_pos_options else 0, key=f"f_pos_{idx}")
+        r["type"] = c2.selectbox(f"ชนิดเหล็ก #{idx+1}", REBAR_LIST, index=REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 2, key=f"f_type_{idx}")
+        r["mode"] = c3.selectbox(f"จำนวน/ระยะห่าง #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r["mode"] == "จำนวน (เส้น)" else 1, key=f"f_mode_{idx}")
+        r["val"] = c4.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"f_val_{idx}")
+        r["len"] = c5.number_input(f"ยาว (ม.) #{idx+1}", value=float(r["len"]), key=f"f_len_{idx}")
         
-        if c5.button("🗑", key=f"del_f_rebar_{idx}"):
+        if c6.button("🗑", key=f"del_f_rebar_{idx}"):
             f_rebars_to_remove.append(idx)
 
         if r["mode"] == "จำนวน (เส้น)":
             total_len_row = r["val"] * r["len"]
         else:
-            calc_count = (math.ceil(f_l / r["val"]) + 1) if r["val"] > 0 else 0
+            count_span = f_w if "ตามยาว" in r.get("pos", "") else f_l
+            calc_count = count_by_spacing(count_span, r["val"])
             total_len_row = calc_count * r["len"]
         
         w_row = total_len_row * REBAR_WEIGHT[r["type"]]
@@ -536,22 +591,25 @@ with tabs[1]:
 
     st.markdown("---")
     if st.button("➕ บันทึกงานฐานราก", type="primary", key="btn_save_footing"):
-        vol_concrete = (f_w * f_l * f_h * f_qty) * (1 + waste_concrete)
-        formwork = (2 * (f_w + f_l) * f_h * f_qty) * (1 + waste_formwork)
-        rebar_weight = tot_footing_rebar_weight * f_qty * (1 + waste_rebar)
+        net_concrete = f_w * f_l * f_h * f_qty
+        vol_concrete = with_waste(net_concrete, waste_concrete)
+        net_formwork = (2 * (f_w + f_l) * f_h * f_qty) if "มีไม้แบบ" in f_form_type else 0.0
+        formwork = with_waste(net_formwork, waste_formwork)
+        net_rebar_weight = tot_footing_rebar_weight * f_qty
+        rebar_weight = with_waste(net_rebar_weight, waste_rebar)
 
-        excavation_area_per_footing = (f_w * f_l) * 1.30
+        excavation_area_per_footing = (f_w + 2 * f_work_space) * (f_l + 2 * f_work_space)
         vol_excavation = excavation_area_per_footing * f_depth * f_qty
-        vol_backfill = max(0.0, vol_excavation - (f_w * f_l * f_h * f_qty))
+        vol_backfill = max(0.0, vol_excavation - net_concrete)
 
-        rebar_breakdown = {k: round(v * f_qty * (1 + waste_rebar), 2) for k, v in footing_rebar_detail.items()}
+        rebar_breakdown = {k: round(with_waste(v * f_qty, waste_rebar), 2) for k, v in footing_rebar_detail.items()}
         mat_c = vol_concrete * p_concrete + sum(v * get_rebar_price(k, p_db12, p_rb9) for k, v in rebar_breakdown.items()) + formwork * p_formwork
-        lab_c = vol_concrete * labour_concrete + rebar_weight * labour_rebar + formwork * labour_formwork
+        lab_c = net_concrete * labour_concrete + net_rebar_weight * labour_rebar + net_formwork * labour_formwork
 
         add_takeoff_item({
             "หมวด": "งานดินขุด-ดินถม",
             "รายการ": f"งานดินสำหรับฐานราก {f_name}",
-            "รายละเอียด": f"ดินขุดเผื่อ 30%: {vol_excavation:.2f} ลบ.ม. | ดินถมย้อนกลับ: {vol_backfill:.2f} ลบ.ม.",
+            "รายละเอียด": f"ดินขุดเผื่อพื้นที่ทำงานด้านละ {f_work_space:.2f}ม.: {vol_excavation:.2f} ลบ.ม. | ดินถมย้อนกลับ: {vol_backfill:.2f} ลบ.ม.",
             "จำนวน": f_qty,
             "คอนกรีต (ลบ.ม.)": 0.0,
             "เหล็ก (กก.)": 0.0,
@@ -586,9 +644,12 @@ with tabs[1]:
             "รายการ": f_name,
             "รายละเอียด": detail_str,
             "จำนวน": f_qty,
+            "คอนกรีตสุทธิ (ลบ.ม.)": round(net_concrete, 2),
             "คอนกรีต (ลบ.ม.)": round(vol_concrete, 2),
+            "เหล็กสุทธิ (กก.)": round(net_rebar_weight, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
             "เหล็กแยกชนิด": rebar_breakdown,
+            "ไม้แบบสุทธิ (ตร.ม.)": round(net_formwork, 2),
             "ไม้แบบ (ตร.ม.)": round(formwork, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
@@ -606,9 +667,9 @@ with tabs[2]:
     col_qty = c3.number_input("จำนวน (ต้น)", min_value=1, value=1, key="col_qty")
     
     cm1, cm2, cm3 = st.columns(3)
-    col_w = cm1.number_input("กว้างเสา (เมตร)", value=0.20, step=0.05, key="col_w")
-    col_l = cm2.number_input("ยาวเสา (เมตร)", value=0.20, step=0.05, key="col_l")
-    col_h = cm3.number_input("ความสูงเสา (เมตร)", value=3.00, step=0.10, key="col_h")
+    col_w = cm1.number_input("กว้างเสา (เมตร)", min_value=0.05, value=0.20, step=0.05, key="col_w")
+    col_l = cm2.number_input("ยาวเสา (เมตร)", min_value=0.05, value=0.20, step=0.05, key="col_l")
+    col_h = cm3.number_input("ความสูงเสา (เมตร)", min_value=0.05, value=3.00, step=0.10, key="col_h")
 
     st.markdown("---")
     head_c, btn_c = st.columns([3, 1])
@@ -651,7 +712,7 @@ with tabs[2]:
         if r["mode"] == "จำนวน (เส้น)":
             total_len_row = r["val"] * r["len"]
         else:
-            calc_count = (math.ceil(col_h / r["val"]) + 1) if r["val"] > 0 else 0
+            calc_count = count_by_spacing(col_h, r["val"])
             total_len_row = calc_count * r["len"]
         
         w_row = total_len_row * REBAR_WEIGHT[r["type"]]
@@ -664,22 +725,28 @@ with tabs[2]:
 
     st.markdown("---")
     if st.button("➕ บันทึกงานเสา", type="primary", key="btn_save_col"):
-        vol = (col_w * col_l * col_h * col_qty) * (1 + waste_concrete)
-        form = (2 * (col_w + col_l) * col_h * col_qty) * (1 + waste_formwork)
-        rebar_weight = tot_col_rebar_weight * col_qty * (1 + waste_rebar)
+        net_concrete = col_w * col_l * col_h * col_qty
+        vol = with_waste(net_concrete, waste_concrete)
+        net_form = 2 * (col_w + col_l) * col_h * col_qty
+        form = with_waste(net_form, waste_formwork)
+        net_rebar_weight = tot_col_rebar_weight * col_qty
+        rebar_weight = with_waste(net_rebar_weight, waste_rebar)
 
-        rebar_breakdown = {k: round(v * col_qty * (1 + waste_rebar), 2) for k, v in col_rebar_detail.items()}
+        rebar_breakdown = {k: round(with_waste(v * col_qty, waste_rebar), 2) for k, v in col_rebar_detail.items()}
         mat_c = vol * p_concrete + sum(v * get_rebar_price(k, p_db12, p_rb9) for k, v in rebar_breakdown.items()) + form * p_formwork
-        lab_c = vol * labour_concrete + rebar_weight * labour_rebar + form * labour_formwork
+        lab_c = net_concrete * labour_concrete + net_rebar_weight * labour_rebar + net_form * labour_formwork
 
         add_takeoff_item({
             "หมวด": "งานเสา",
             "รายการ": f"{col_name} ({col_level})",
             "รายละเอียด": f"[{col_level}] ขนาด {col_w:.2f}x{col_l:.2f}ม. สูง {col_h:.2f}ม. ({col_qty} ต้น)",
             "จำนวน": col_qty,
+            "คอนกรีตสุทธิ (ลบ.ม.)": round(net_concrete, 2),
             "คอนกรีต (ลบ.ม.)": round(vol, 2),
+            "เหล็กสุทธิ (กก.)": round(net_rebar_weight, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
             "เหล็กแยกชนิด": rebar_breakdown,
+            "ไม้แบบสุทธิ (ตร.ม.)": round(net_form, 2),
             "ไม้แบบ (ตร.ม.)": round(form, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
@@ -697,9 +764,9 @@ with tabs[3]:
     beam_qty = b3.number_input("จำนวน (คาน)", min_value=1, value=1, key="b_qty")
     
     bm1, bm2, bm3 = st.columns(3)
-    beam_w = bm1.number_input("ความกว้างคาน (เมตร)", value=0.20, step=0.05, key="b_w")
-    beam_h = bm2.number_input("ความลึก/สูงคาน (เมตร)", value=0.40, step=0.05, key="b_h")
-    beam_l = bm3.number_input("ความยาวคาน (เมตร)", value=4.00, step=0.10, key="b_l")
+    beam_w = bm1.number_input("ความกว้างคาน (เมตร)", min_value=0.05, value=0.20, step=0.05, key="b_w")
+    beam_h = bm2.number_input("ความลึก/สูงคาน (เมตร)", min_value=0.05, value=0.40, step=0.05, key="b_h")
+    beam_l = bm3.number_input("ความยาวคาน (เมตร)", min_value=0.05, value=4.00, step=0.10, key="b_l")
 
     st.markdown("---")
     head_b, btn_b = st.columns([3, 1])
@@ -742,7 +809,7 @@ with tabs[3]:
         if r["mode"] == "จำนวน (เส้น)":
             total_len_row = r["val"] * r["len"]
         else:
-            calc_count = (math.ceil(beam_l / r["val"]) + 1) if r["val"] > 0 else 0
+            calc_count = count_by_spacing(beam_l, r["val"])
             total_len_row = calc_count * r["len"]
         
         w_row = total_len_row * REBAR_WEIGHT[r["type"]]
@@ -755,22 +822,28 @@ with tabs[3]:
 
     st.markdown("---")
     if st.button("➕ บันทึกงานคาน", type="primary", key="btn_save_beam"):
-        vol = (beam_w * beam_h * beam_l * beam_qty) * (1 + waste_concrete)
-        form = ((2 * beam_h + beam_w) * beam_l * beam_qty) * (1 + waste_formwork)
-        rebar_weight = tot_beam_rebar_weight * beam_qty * (1 + waste_rebar)
+        net_concrete = beam_w * beam_h * beam_l * beam_qty
+        vol = with_waste(net_concrete, waste_concrete)
+        net_form = (2 * beam_h + beam_w) * beam_l * beam_qty
+        form = with_waste(net_form, waste_formwork)
+        net_rebar_weight = tot_beam_rebar_weight * beam_qty
+        rebar_weight = with_waste(net_rebar_weight, waste_rebar)
 
-        rebar_breakdown = {k: round(v * beam_qty * (1 + waste_rebar), 2) for k, v in beam_rebar_detail.items()}
+        rebar_breakdown = {k: round(with_waste(v * beam_qty, waste_rebar), 2) for k, v in beam_rebar_detail.items()}
         mat_c = vol * p_concrete + sum(v * get_rebar_price(k, p_db12, p_rb9) for k, v in rebar_breakdown.items()) + form * p_formwork
-        lab_c = vol * labour_concrete + rebar_weight * labour_rebar + form * labour_formwork
+        lab_c = net_concrete * labour_concrete + net_rebar_weight * labour_rebar + net_form * labour_formwork
 
         add_takeoff_item({
             "หมวด": "งานคาน",
             "รายการ": f"{beam_name} ({beam_level})",
             "รายละเอียด": f"[{beam_level}] ขนาด {beam_w:.2f}x{beam_h:.2f}ม. ยาว {beam_l:.2f}ม. ({beam_qty} คาน)",
             "จำนวน": beam_qty,
+            "คอนกรีตสุทธิ (ลบ.ม.)": round(net_concrete, 2),
             "คอนกรีต (ลบ.ม.)": round(vol, 2),
+            "เหล็กสุทธิ (กก.)": round(net_rebar_weight, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
             "เหล็กแยกชนิด": rebar_breakdown,
+            "ไม้แบบสุทธิ (ตร.ม.)": round(net_form, 2),
             "ไม้แบบ (ตร.ม.)": round(form, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
@@ -786,14 +859,15 @@ with tabs[4]:
     slab_qty = s2.number_input("จำนวน (ผืน)", min_value=1, value=1, key="s_qty")
     
     sm1, sm2, sm3 = st.columns(3)
-    slab_w = sm1.number_input("ความกว้างพื้น (เมตร)", value=3.00, step=0.10, key="s_w")
-    slab_l = sm2.number_input("ความยาวพื้น (เมตร)", value=4.00, step=0.10, key="s_l")
-    slab_h = sm3.number_input("ความหนาพื้น (เมตร)", value=0.10, step=0.01, key="s_h")
+    slab_w = sm1.number_input("ความกว้างพื้น (เมตร)", min_value=0.05, value=3.00, step=0.10, key="s_w")
+    slab_l = sm2.number_input("ความยาวพื้น (เมตร)", min_value=0.05, value=4.00, step=0.10, key="s_l")
+    slab_h = sm3.number_input("ความหนาพื้น (เมตร)", min_value=0.03, value=0.10, step=0.01, key="s_h")
     slab_support = st.selectbox(
         "ลักษณะพื้น",
         ["พื้นยก/พื้น คสล. มีแบบหล่อใต้ท้องพื้น", "พื้นวางบนดิน (Slab on Ground)"],
         key="s_support"
     )
+    slab_openings = st.number_input("หักพื้นที่ช่องเปิดรวม (ตร.ม.)", min_value=0.0, value=0.0, step=0.10, key="s_openings")
 
     st.markdown("---")
     head_s, btn_s = st.columns([3, 1])
@@ -811,8 +885,7 @@ with tabs[4]:
         "เหล็กล่าง/ตะแกรงทางกว้าง", 
         "เหล็กบน/ตะแกรงทางยาว", 
         "เหล็กบน/ตะแกรงทางกว้าง", 
-        "เหล็กคอมเมนท์/เหล็กเสริมพิเศษ", 
-        "ตะแกรงเหล็กสำเร็จรูป (Wire Mesh)"
+        "เหล็กคอมเมนท์/เหล็กเสริมพิเศษ"
     ]
 
     for idx, r in enumerate(st.session_state["slab_rebars"]):
@@ -842,7 +915,7 @@ with tabs[4]:
         else:
             # ทางยาวนับตามความกว้าง, ทางกว้างนับตามความยาว
             count_span = slab_w if "ทางยาว" in r["pos"] else slab_l
-            calc_count = (math.ceil(count_span / r["val"]) + 1) if r["val"] > 0 else 0
+            calc_count = count_by_spacing(count_span, r["val"])
             total_len_row = calc_count * r["len"]
         
         w_row = total_len_row * REBAR_WEIGHT[r["type"]]
@@ -855,34 +928,40 @@ with tabs[4]:
 
     st.markdown("---")
     if st.button("➕ บันทึกงานพื้น", type="primary", key="btn_save_slab"):
-        area = slab_w * slab_l * slab_qty
-        vol = (area * slab_h) * (1 + waste_concrete)
-        form_base = area if "พื้นยก" in slab_support else 0.0
-        form = form_base * (1 + waste_formwork)
-        rebar_weight = tot_slab_rebar_weight * slab_qty * (1 + waste_rebar)
+        gross_area = slab_w * slab_l * slab_qty
+        net_area = max(0.0, gross_area - slab_openings)
+        net_concrete = net_area * slab_h
+        vol = with_waste(net_concrete, waste_concrete)
+        net_form_base = net_area if "พื้นยก" in slab_support else 0.0
+        net_form = net_form_base
+        form = with_waste(net_form, waste_formwork)
+        net_rebar_weight = tot_slab_rebar_weight * slab_qty
+        rebar_weight = with_waste(net_rebar_weight, waste_rebar)
 
         tot_rebar_mat_cost = 0.0
         rebar_breakdown = {}
 
         for r_type, w_base in slab_rebar_detail.items():
-            w_tot = w_base * slab_qty * (1 + waste_rebar)
+            w_tot = with_waste(w_base * slab_qty, waste_rebar)
             rebar_breakdown[r_type] = round(w_tot, 2)
-            p_s = p_db12 if "DB" in r_type else p_rb9
-            tot_rebar_mat_cost += w_tot * p_s
+            tot_rebar_mat_cost += w_tot * get_rebar_price(r_type, p_db12, p_rb9)
 
         mat_c = vol * p_concrete + tot_rebar_mat_cost + form * p_formwork
-        lab_c = vol * labour_concrete + rebar_weight * labour_rebar + form * labour_formwork
+        lab_c = net_concrete * labour_concrete + net_rebar_weight * labour_rebar + net_form * labour_formwork
 
         rebar_desc = ", ".join([f"{k}: {v:.1f} กก." for k, v in rebar_breakdown.items()]) if rebar_breakdown else "ไม่ใส่เหล็กเสริม"
 
         add_takeoff_item({
             "หมวด": "งานพื้น",
             "รายการ": slab_name,
-            "รายละเอียด": f"ขนาด {slab_w:.2f}x{slab_l:.2f}ม. หนา {slab_h:.2f}ม. ({slab_qty} ผืน) | {slab_support} | เหล็กเสริม: {rebar_desc}",
+            "รายละเอียด": f"ขนาด {slab_w:.2f}x{slab_l:.2f}ม. หนา {slab_h:.2f}ม. ({slab_qty} ผืน) | {slab_support} | หักช่องเปิด {slab_openings:.2f} ตร.ม. | เหล็กเสริม: {rebar_desc}",
             "จำนวน": slab_qty,
+            "คอนกรีตสุทธิ (ลบ.ม.)": round(net_concrete, 2),
             "คอนกรีต (ลบ.ม.)": round(vol, 2),
+            "เหล็กสุทธิ (กก.)": round(net_rebar_weight, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
             "เหล็กแยกชนิด": rebar_breakdown,
+            "ไม้แบบสุทธิ (ตร.ม.)": round(net_form, 2),
             "ไม้แบบ (ตร.ม.)": round(form, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
@@ -901,8 +980,8 @@ with tabs[5]:
         wall_qty = w3.number_input("จำนวนผนังชุดนี้ (ผืน)", min_value=1, value=1, key="wall_qty")
 
         wm1, wm2 = st.columns(2)
-        wall_l = wm1.number_input("ความยาวผนัง (เมตร)", value=4.00, step=0.10, key="wall_l")
-        wall_h = wm2.number_input("ความสูงผนัง (เมตร)", value=2.80, step=0.10, key="wall_h")
+        wall_l = wm1.number_input("ความยาวผนัง (เมตร)", min_value=0.05, value=4.00, step=0.10, key="wall_l")
+        wall_h = wm2.number_input("ความสูงผนัง (เมตร)", min_value=0.05, value=2.80, step=0.10, key="wall_h")
 
         st.markdown("**🚪 ช่องเปิดเพื่อหักพื้นที่ (ประตู / หน้าต่าง)**")
         d1, d2, d3 = st.columns(3)
@@ -916,37 +995,48 @@ with tabs[5]:
         paint_sides = p2.selectbox("งานทาสี", ["ทาสี 2 ด้าน", "ทาสี 1 ด้าน", "ไม่คิดงานทาสี"], key="paint_sides")
         lintel_rebar_type = p3.selectbox("เหล็กเสริมเสาเอ็น-คานทับหลัง", ["RB6", "RB9"], index=1, key="lintel_rebar_type")
 
+        lm1, lm2 = st.columns(2)
+        lintel_mode = lm1.selectbox("วิธีประมาณความยาวเสาเอ็น/ทับหลัง", ["ประมาณจากช่องเปิด", "ระบุความยาวรวมจากแบบ"], key="lintel_mode")
+        lintel_extra_len = lm2.number_input("ความยาวเสาเอ็น/ทับหลังรวมจากแบบ (ทุกผืน, ม.)", min_value=0.0, value=0.0, step=0.10, key="lintel_extra_len")
+
         if st.button("➕ บันทึกงานผนังและฉาบปูน", type="primary", key="btn_save_wall"):
             gross_area = (wall_l * wall_h) * wall_qty
             deduct_area = (deduct_w * deduct_h * deduct_qty) * wall_qty
-            net_masonry_area = max(0.0, gross_area - deduct_area) * (1 + waste_wall)
+            net_wall_area = max(0.0, gross_area - deduct_area)
+            proc_masonry_area = with_waste(net_wall_area, waste_wall)
 
             p_brick, lab_masonry_used = brick_price_map.get(brick_type, (p_brick_red, labour_masonry))
-            cost_masonry_mat = net_masonry_area * p_brick
-            cost_masonry_lab = net_masonry_area * lab_masonry_used
+            cost_masonry_mat = proc_masonry_area * p_brick
+            cost_masonry_lab = net_wall_area * lab_masonry_used
 
             plaster_mult = 2.0 if "2 ด้าน" in plaster_sides else (1.0 if "1 ด้าน" in plaster_sides else 0.0)
-            net_plaster_area = max(0.0, gross_area - deduct_area) * plaster_mult * (1 + waste_finishing)
-            cost_plaster_mat = net_plaster_area * p_plaster_mat
+            net_plaster_area = net_wall_area * plaster_mult
+            proc_plaster_area = with_waste(net_plaster_area, waste_finishing)
+            cost_plaster_mat = proc_plaster_area * p_plaster_mat
             cost_plaster_lab = net_plaster_area * labour_plastering
 
             paint_mult = 2.0 if "2 ด้าน" in paint_sides else (1.0 if "1 ด้าน" in paint_sides else 0.0)
-            net_paint_area = max(0.0, gross_area - deduct_area) * paint_mult * (1 + waste_finishing)
-            cost_paint_mat = net_paint_area * p_paint_mat
+            net_paint_area = net_wall_area * paint_mult
+            proc_paint_area = with_waste(net_paint_area, waste_finishing)
+            cost_paint_mat = proc_paint_area * p_paint_mat
             cost_paint_lab = net_paint_area * labour_painting
 
-            # ประมาณความยาวเสาเอ็น/ทับหลังจากขอบช่องเปิด: ใช้เส้นรอบช่องเปิดเป็นค่าประเมิน
-            opening_lintel_len = (2 * (deduct_w + deduct_h)) * deduct_qty if deduct_qty > 0 else 0.0
-            extra_col_lintel = wall_h * (math.ceil(wall_l / 4.0) - 1) if wall_l > 4.0 else 0.0
-            extra_beam_lintel = wall_l * (math.ceil(wall_h / 3.0) - 1) if wall_h > 3.0 else 0.0
-            tot_lintel_len = (opening_lintel_len + extra_col_lintel + extra_beam_lintel) * wall_qty
+            # งานเสาเอ็น/ทับหลังเป็นเพียงค่าประมาณ: ให้ผู้ใช้ระบุจากแบบได้โดยตรงเมื่อมีแบบโครงสร้าง
+            opening_lintel_len = (deduct_w * deduct_qty) if deduct_qty > 0 else 0.0
+            if lintel_mode == "ระบุความยาวรวมจากแบบ":
+                tot_lintel_len = lintel_extra_len
+            else:
+                tot_lintel_len = (opening_lintel_len + lintel_extra_len) * wall_qty
 
-            vol_lintel_concrete = (0.10 * 0.10 * tot_lintel_len) * (1 + waste_concrete)
-            form_lintel = (0.20 * tot_lintel_len) * (1 + waste_formwork)
-            rebar_lintel_weight = (2 * tot_lintel_len * REBAR_WEIGHT[lintel_rebar_type]) * (1 + waste_rebar)
+            net_lintel_concrete = 0.10 * 0.10 * tot_lintel_len
+            vol_lintel_concrete = with_waste(net_lintel_concrete, waste_concrete)
+            net_form_lintel = 0.30 * tot_lintel_len
+            form_lintel = with_waste(net_form_lintel, waste_formwork)
+            net_rebar_lintel_weight = 2 * tot_lintel_len * REBAR_WEIGHT[lintel_rebar_type]
+            rebar_lintel_weight = with_waste(net_rebar_lintel_weight, waste_rebar)
 
             cost_lintel_mat = vol_lintel_concrete * p_concrete + rebar_lintel_weight * get_rebar_price(lintel_rebar_type, p_db12, p_rb9) + form_lintel * p_formwork
-            cost_lintel_lab = vol_lintel_concrete * labour_concrete + rebar_lintel_weight * labour_rebar + form_lintel * labour_formwork
+            cost_lintel_lab = net_lintel_concrete * labour_concrete + net_rebar_lintel_weight * labour_rebar + net_form_lintel * labour_formwork
 
             total_wall_mat = cost_masonry_mat + cost_plaster_mat + cost_paint_mat + cost_lintel_mat
             total_wall_lab = cost_masonry_lab + cost_plaster_lab + cost_paint_lab + cost_lintel_lab
@@ -954,14 +1044,19 @@ with tabs[5]:
             add_takeoff_item({
                 "หมวด": "งานผนังและฉาบปูน",
                 "รายการ": wall_name,
-                "รายละเอียด": f"{brick_type} | ก่อ {net_masonry_area:.1f} ตร.ม. | ฉาบ {net_plaster_area:.1f} ตร.ม. | ทาสี {net_paint_area:.1f} ตร.ม. | เสาเอ็น/ทับหลัง {tot_lintel_len:.1f} ม.",
+                "รายละเอียด": f"{brick_type} | ก่อสุทธิ {net_wall_area:.1f} ตร.ม. / จัดซื้อ {proc_masonry_area:.1f} | ฉาบสุทธิ {net_plaster_area:.1f} / จัดซื้อ {proc_plaster_area:.1f} | ทาสีสุทธิ {net_paint_area:.1f} / จัดซื้อ {proc_paint_area:.1f} | เสาเอ็น/ทับหลัง {tot_lintel_len:.1f} ม.",
                 "จำนวน": wall_qty,
-                "คอนกรีต (ลบ.ม.)": round(vol_lintel_concrete, 2),
-                "เหล็ก (กก.)": round(rebar_lintel_weight, 2),
+                "คอนกรีตสุทธิ (ลบ.ม.)": round(net_lintel_concrete, 2),
+            "คอนกรีต (ลบ.ม.)": round(vol_lintel_concrete, 2),
+            "เหล็กสุทธิ (กก.)": round(net_rebar_lintel_weight, 2),
+            "เหล็ก (กก.)": round(rebar_lintel_weight, 2),
                 "เหล็กแยกชนิด": {lintel_rebar_type: round(rebar_lintel_weight, 2)},
+                "ไม้แบบสุทธิ (ตร.ม.)": round(net_form_lintel, 2),
                 "ไม้แบบ (ตร.ม.)": round(form_lintel, 2),
-                "พื้นที่ก่อ (ตร.ม.)": round(net_masonry_area, 2),
-                "พื้นที่ฉาบ (ตร.ม.)": round(net_plaster_area, 2),
+                "พื้นที่ก่อสุทธิ (ตร.ม.)": round(net_wall_area, 2),
+                "พื้นที่ก่อ (ตร.ม.)": round(proc_masonry_area, 2),
+                "พื้นที่ฉาบสุทธิ (ตร.ม.)": round(net_plaster_area, 2),
+                "พื้นที่ฉาบ (ตร.ม.)": round(proc_plaster_area, 2),
                 "ค่าวัสดุ (บาท)": round(total_wall_mat, 2),
                 "ค่าแรง (บาท)": round(total_wall_lab, 2)
             })
@@ -1002,20 +1097,22 @@ with tabs[5]:
 
         if st.button("➕ บันทึกงานปูพื้น", type="primary", key="btn_save_floor"):
             area_calculated = (floor_w * floor_l * floor_qty)
-            net_area = area_calculated * (1 + waste_finishing)
+            net_area = area_calculated
+            proc_area = with_waste(net_area, waste_finishing)
             
             p_mat, p_lab = floor_price_map.get(floor_material_type, (p_tile_mat, labour_tile))
             
             add_takeoff_item({
                 "หมวด": "งานปูพื้นและตกแต่งผิว",
                 "รายการ": floor_name,
-                "รายละเอียด": f"{floor_material_type} ขนาด {floor_w:.2f}x{floor_l:.2f}ม. ({floor_qty} ชุด) | พื้นที่รวม {net_area:.1f} ตร.ม.",
+                "รายละเอียด": f"{floor_material_type} ขนาด {floor_w:.2f}x{floor_l:.2f}ม. ({floor_qty} ชุด) | สุทธิ {net_area:.1f} ตร.ม. | จัดซื้อ {proc_area:.1f} ตร.ม.",
                 "จำนวน": floor_qty,
                 "คอนกรีต (ลบ.ม.)": 0.0,
                 "เหล็ก (กก.)": 0.0,
                 "ไม้แบบ (ตร.ม.)": 0.0,
-                "พื้นที่ปูพื้น (ตร.ม.)": round(net_area, 2),
-                "ค่าวัสดุ (บาท)": round(net_area * p_mat, 2),
+                "พื้นที่ปูพื้นสุทธิ (ตร.ม.)": round(net_area, 2),
+                "พื้นที่ปูพื้น (ตร.ม.)": round(proc_area, 2),
+                "ค่าวัสดุ (บาท)": round(proc_area * p_mat, 2),
                 "ค่าแรง (บาท)": round(net_area * p_lab, 2)
             })
 
@@ -1037,20 +1134,22 @@ with tabs[6]:
 
     if st.button("➕ บันทึกงานฝ้าเพดาน", type="primary", key="btn_save_ceiling"):
         area_calculated = (ceiling_w * ceiling_l * ceiling_qty)
-        net_area = area_calculated * (1 + waste_finishing)
+        net_area = area_calculated
+        proc_area = with_waste(net_area, waste_finishing)
         
         c_mat, c_lab = ceiling_price_map.get(ceiling_type, (p_ceiling_mat, labour_ceiling))
         
         add_takeoff_item({
             "หมวด": "งานฝ้าเพดาน",
             "รายการ": ceiling_name,
-            "รายละเอียด": f"{ceiling_type} ขนาด {ceiling_w:.2f}x{ceiling_l:.2f}ม. ({ceiling_qty} ผืน) | พื้นที่รวม {net_area:.1f} ตร.ม.",
+            "รายละเอียด": f"{ceiling_type} ขนาด {ceiling_w:.2f}x{ceiling_l:.2f}ม. ({ceiling_qty} ผืน) | สุทธิ {net_area:.1f} ตร.ม. | จัดซื้อ {proc_area:.1f} ตร.ม.",
             "จำนวน": ceiling_qty,
             "คอนกรีต (ลบ.ม.)": 0.0,
             "เหล็ก (กก.)": 0.0,
             "ไม้แบบ (ตร.ม.)": 0.0,
-            "พื้นที่ฝ้า (ตร.ม.)": round(net_area, 2),
-            "ค่าวัสดุ (บาท)": round(net_area * c_mat, 2),
+            "พื้นที่ฝ้าสุทธิ (ตร.ม.)": round(net_area, 2),
+            "พื้นที่ฝ้า (ตร.ม.)": round(proc_area, 2),
+            "ค่าวัสดุ (บาท)": round(proc_area * c_mat, 2),
             "ค่าแรง (บาท)": round(net_area * c_lab, 2)
         })
 
@@ -1064,10 +1163,11 @@ with tabs[7]:
     stair_name = st1.text_input("ชื่อ/สัญลักษณ์บันได", value="ST1", key="stair_name")
     stair_qty = st2.number_input("จำนวนชุดบันได", min_value=1, value=1, key="stair_qty")
     
-    st_c1, st_c2, st_c3 = st.columns(3)
-    stair_w = st_c1.number_input("ความกว้างบันได (เมตร)", value=1.20, step=0.05, key="stair_w")
-    num_steps = st_c2.number_input("จำนวนขั้นบันได (ขั้น)", min_value=1, value=10, key="num_steps")
-    step_r_cm = st_c3.number_input("ลูกตั้ง (ซม.)", value=17.5, step=0.5, key="step_r_cm")
+    st_c1, st_c2, st_c3, st_c4 = st.columns(4)
+    stair_w = st_c1.number_input("ความกว้างบันได (เมตร)", min_value=0.05, value=1.20, step=0.05, key="stair_w")
+    num_steps = st_c2.number_input("จำนวนลูกตั้ง (ขั้น)", min_value=1, value=10, key="num_steps")
+    num_treads = st_c3.number_input("จำนวนลูกนอน (ขั้น)", min_value=1, value=9, key="num_treads")
+    step_r_cm = st_c4.number_input("ลูกตั้ง (ซม.)", min_value=1.0, value=17.5, step=0.5, key="step_r_cm")
     
     st_c4, st_c5 = st.columns(2)
     step_t_cm = st_c4.number_input("ลูกนอน (ซม.)", value=25.0, step=1.0, key="step_t_cm")
@@ -1093,31 +1193,37 @@ with tabs[7]:
         slab_th = slab_th_cm / 100.0
         land_th = land_th_cm / 100.0
 
-        run_len = num_steps * step_t
+        run_len = num_treads * step_t
         rise_len = num_steps * step_r
         inclined_len = math.sqrt(run_len**2 + rise_len**2)
 
-        vol_steps = (0.5 * step_r * step_t * stair_w) * num_steps
-        vol_slab = (inclined_len * stair_w * slab_th)
+        vol_steps = (0.5 * step_r * step_t * stair_w) * num_treads
+        vol_slab = inclined_len * stair_w * slab_th
         vol_landing = (land_w * land_l * land_th) if has_landing else 0.0
-        tot_vol = (vol_steps + vol_slab + vol_landing) * stair_qty * (1 + waste_concrete)
+        net_vol = (vol_steps + vol_slab + vol_landing) * stair_qty
+        tot_vol = with_waste(net_vol, waste_concrete)
         
         form_bottom = inclined_len * stair_w
-        form_risers = num_steps * step_r * stair_w
-        form_sides = (0.5 * run_len * rise_len) * 2
+        form_risers = num_treads * step_r * stair_w
+        form_sides = 2 * inclined_len * slab_th
         form_landing = (land_w * land_l) + (2 * (land_w + land_l) * land_th) if has_landing else 0.0
-        tot_form = (form_bottom + form_risers + form_sides + form_landing) * stair_qty * (1 + waste_formwork)
+        net_form = (form_bottom + form_risers + form_sides + form_landing) * stair_qty
+        tot_form = with_waste(net_form, waste_formwork)
 
-        num_main_bars = math.ceil(stair_w / stair_rebar_spacing) + 1
-        num_cross_bars = math.ceil(inclined_len / stair_rebar_spacing) + 1
+        if stair_rebar_spacing <= 0:
+            st.error("ระยะห่างเหล็กบันไดต้องมากกว่า 0")
+            st.stop()
+        num_main_bars = count_by_spacing(stair_w, stair_rebar_spacing)
+        num_cross_bars = count_by_spacing(inclined_len, stair_rebar_spacing)
         stair_rebar_len = (num_main_bars * (inclined_len + 0.60)) + (num_cross_bars * stair_w)
-        tot_rebar_weight = stair_rebar_len * stair_qty * REBAR_WEIGHT[stair_rebar_type] * (1 + waste_rebar)
+        net_rebar_weight = stair_rebar_len * stair_qty * REBAR_WEIGHT[stair_rebar_type]
+        tot_rebar_weight = with_waste(net_rebar_weight, waste_rebar)
 
-        p_stair_rebar = p_db12 if "DB" in stair_rebar_type else p_rb9
+        p_stair_rebar = get_rebar_price(stair_rebar_type, p_db12, p_rb9)
         mat_c = tot_vol * p_concrete + tot_rebar_weight * p_stair_rebar + tot_form * p_formwork
-        lab_c = tot_vol * labour_concrete + tot_rebar_weight * labour_rebar + tot_form * labour_formwork
+        lab_c = net_vol * labour_concrete + net_rebar_weight * labour_rebar + net_form * labour_formwork
 
-        detail_text = f"บันได {num_steps} ขั้น (กว้าง {stair_w:.2f}ม.) | เหล็ก {stair_rebar_type}@{stair_rebar_spacing:.2f}ม."
+        detail_text = f"ลูกตั้ง {num_steps} ขั้น / ลูกนอน {num_treads} ขั้น (กว้าง {stair_w:.2f}ม.) | Run {run_len:.2f}ม. Rise {rise_len:.2f}ม. | เหล็ก {stair_rebar_type}@{stair_rebar_spacing:.2f}ม."
         if has_landing:
             detail_text += f" + ชานพัก {land_w:.2f}x{land_l:.2f}ม."
 
@@ -1126,9 +1232,12 @@ with tabs[7]:
             "รายการ": stair_name,
             "รายละเอียด": detail_text,
             "จำนวน": stair_qty,
+            "คอนกรีตสุทธิ (ลบ.ม.)": round(net_vol, 2),
             "คอนกรีต (ลบ.ม.)": round(tot_vol, 2),
+            "เหล็กสุทธิ (กก.)": round(net_rebar_weight, 2),
             "เหล็ก (กก.)": round(tot_rebar_weight, 2),
             "เหล็กแยกชนิด": {stair_rebar_type: round(tot_rebar_weight, 2)},
+            "ไม้แบบสุทธิ (ตร.ม.)": round(net_form, 2),
             "ไม้แบบ (ตร.ม.)": round(tot_form, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
@@ -1142,43 +1251,52 @@ with tabs[8]:
     
     r1, r2, r3 = st.columns([1, 1.5, 1.5])
     roof_name = r1.text_input("ชื่อ/สัญลักษณ์หลังคา", value="R1", key="roof_name")
-    roof_shape = r2.selectbox("ประเภททรงหลังคา (Roof Form Factor)", list(ROOF_SHAPE_FACTORS.keys()), key="roof_shape")
+    roof_shape = r2.selectbox("ประเภททรงหลังคา", list(ROOF_SHAPE_FACTORS.keys()), key="roof_shape")
     roof_material = r3.selectbox("ประเภทวัสดุมุง (Roof Material Type)", list(ROOF_MATERIAL_SPECS.keys()), key="roof_material")
 
-    rc1, rc2, rc3, rc4 = st.columns(4)
-    roof_plan_w = rc1.number_input("ความกว้างผังหลังคา (เมตร)", value=10.0, step=0.5, key="roof_plan_w")
-    roof_plan_l = rc2.number_input("ความยาวผังหลังคา (เมตร)", value=12.0, step=0.5, key="roof_plan_l")
-    roof_pitch = rc3.number_input("ความชันหลังคา (องศา °)", min_value=0.0, max_value=85.0, value=30.0, step=1.0, key="roof_pitch")
-    ridge_len = rc4.number_input("ความยาวครอบสัน/ตะเข้สันรวม (เมตร)", value=25.0, step=1.0, key="ridge_len")
+    ra1, ra2, ra3 = st.columns(3)
+    roof_area_mode = ra1.selectbox("วิธีหาพื้นที่มุง", ["คำนวณจากผัง + มุมลาด", "ระบุพื้นที่มุงจริงจากแบบ"], key="roof_area_mode")
+    roof_overhang = ra2.number_input("ชายคายื่นเฉลี่ยด้านละ (เมตร)", min_value=0.0, value=0.30, step=0.05, key="roof_overhang")
+    roof_manual_area = ra3.number_input("พื้นที่มุงจริงจากแบบ (ตร.ม.)", min_value=0.0, value=0.0, step=0.5, key="roof_manual_area")
 
-    shape_factor = ROOF_SHAPE_FACTORS.get(roof_shape, 1.10)
+    rs1, rs2 = st.columns(2)
+    roof_steel_mode = rs1.selectbox("วิธีหาน้ำหนักโครงเหล็ก", ["ประเมินจาก kg/ตร.ม.", "ระบุจากรายการคำนวณ/แบบโครงหลังคา"], key="roof_steel_mode")
+    roof_manual_steel = rs2.number_input("น้ำหนักโครงเหล็กสุทธิจากแบบ (กก.)", min_value=0.0, value=0.0, step=10.0, key="roof_manual_steel")
+
+    rc1, rc2, rc3, rc4 = st.columns(4)
+    roof_plan_w = rc1.number_input("ความกว้างผังหลังคา (เมตร)", min_value=0.05, value=10.0, step=0.5, key="roof_plan_w")
+    roof_plan_l = rc2.number_input("ความยาวผังหลังคา (เมตร)", min_value=0.05, value=12.0, step=0.5, key="roof_plan_l")
+    roof_pitch = rc3.number_input("ความชันหลังคา (องศา °)", min_value=0.0, max_value=85.0, value=30.0, step=1.0, key="roof_pitch")
+    ridge_len = rc4.number_input("ความยาวครอบสัน/ตะเข้สันรวม (เมตร)", min_value=0.0, value=25.0, step=1.0, key="ridge_len")
+
     mat_spec = ROOF_MATERIAL_SPECS.get(roof_material, {"mat": 300.0, "lab": 120.0, "steel_factor": 20.0})
 
-    plan_area = roof_plan_w * roof_plan_l
+    plan_area = max(0.0, (roof_plan_w + 2 * roof_overhang) * (roof_plan_l + 2 * roof_overhang))
     rad = math.radians(roof_pitch)
     cos_val = math.cos(rad)
     pitch_slope_factor = 1.0 / cos_val if cos_val > 0.001 else 1.0
-    
-    real_roof_area = plan_area * pitch_slope_factor * shape_factor
+    auto_roof_area = plan_area * pitch_slope_factor
+    real_roof_area = roof_manual_area if roof_area_mode == "ระบุพื้นที่มุงจริงจากแบบ" and roof_manual_area > 0 else auto_roof_area
 
-    st.info(f"💡 **ประเมินพื้นที่มุงจริง**: {real_roof_area:.2f} ตร.ม. (พื้นที่ราบ {plan_area:.1f} ตร.ม. × Factor มุมเอียง {pitch_slope_factor:.3f} × Factor ทรงหลังคา {shape_factor:.2f})")
+    st.info(f"💡 **พื้นที่มุงที่ใช้คำนวณ**: {real_roof_area:.2f} ตร.ม. | พื้นที่ฉายรวมชายคา {plan_area:.2f} ตร.ม. | Factor ความชัน {pitch_slope_factor:.3f} | ไม่ใช้ Factor ทรงซ้ำซ้อน")
 
     if st.button("➕ บันทึกงานหลังคา", type="primary", key="btn_save_roof"):
-        tile_area = real_roof_area * (1 + waste_roof)
+        tile_area = with_waste(real_roof_area, waste_roof)
         steel_factor = mat_spec["steel_factor"]
-        tot_steel_weight = real_roof_area * steel_factor * (1 + waste_rebar)
+        net_steel_weight = roof_manual_steel if roof_steel_mode == "ระบุจากรายการคำนวณ/แบบโครงหลังคา" and roof_manual_steel > 0 else real_roof_area * steel_factor
+        tot_steel_weight = with_waste(net_steel_weight, waste_rebar)
 
         p_tile = mat_spec["mat"]
         l_tile = mat_spec["lab"]
 
         mat_roof_tiles = tile_area * p_tile
-        lab_roof_tiles = tile_area * l_tile
+        lab_roof_tiles = real_roof_area * l_tile
         
         mat_ridge = ridge_len * p_roof_cap
         lab_ridge = ridge_len * 60.0
 
-        mat_steel = tot_steel_weight * p_rb9
-        lab_steel = tot_steel_weight * labour_rebar
+        mat_steel = tot_steel_weight * p_roof_steel
+        lab_steel = net_steel_weight * labour_roof_steel
 
         total_roof_mat = mat_roof_tiles + mat_ridge + mat_steel
         total_roof_lab = lab_roof_tiles + lab_ridge + lab_steel
@@ -1186,9 +1304,10 @@ with tabs[8]:
         add_takeoff_item({
             "หมวด": "งานหลังคา",
             "รายการ": roof_name,
-            "รายละเอียด": f"{roof_shape} | {roof_material} (พื้นที่มุงเผื่อ: {tile_area:.1f} ตร.ม. | โครงเหล็ก: {tot_steel_weight:.1f} กก.)",
+            "รายละเอียด": f"{roof_shape} | {roof_material} | พื้นที่มุงสุทธิ {real_roof_area:.1f} ตร.ม. / จัดซื้อ {tile_area:.1f} ตร.ม. | โครงเหล็กสุทธิ {net_steel_weight:.1f} / จัดซื้อ {tot_steel_weight:.1f} กก. | {'อ้างอิงแบบ' if roof_steel_mode.startswith('ระบุ') else f'Factor {steel_factor:.1f} kg/ตร.ม.'}",
             "จำนวน": 1,
             "คอนกรีต (ลบ.ม.)": 0.0,
+            "เหล็กสุทธิ (กก.)": round(net_steel_weight, 2),
             "เหล็ก (กก.)": round(tot_steel_weight, 2),
             "เหล็กแยกชนิด": {"โครงเหล็กหลังคา": round(tot_steel_weight, 2)},
             "ไม้แบบ (ตร.ม.)": 0.0,
@@ -1207,21 +1326,27 @@ with tabs[9]:
     else:
         df_items = pd.DataFrame(current_proj["items"])
         
+        for _col in ["คอนกรีต (ลบ.ม.)", "เหล็ก (กก.)", "ไม้แบบ (ตร.ม.)", "ค่าวัสดุ (บาท)", "ค่าแรง (บาท)"]:
+            if _col in df_items.columns:
+                df_items[_col] = pd.to_numeric(df_items[_col], errors="coerce").fillna(0.0)
         tot_conc = df_items["คอนกรีต (ลบ.ม.)"].sum() if "คอนกรีต (ลบ.ม.)" in df_items else 0.0
-        tot_steel = df_items["เหล็ก (กก.)"].sum() if "เหล็ก (กก.)" in df_items else 0.0
+        tot_steel_all = df_items["เหล็ก (กก.)"].sum() if "เหล็ก (กก.)" in df_items else 0.0
+        tot_rebar = sum(sum_rebar_breakdown(current_proj.get("items", [])))
+        tot_roof_steel = sum_structural_steel(current_proj.get("items", []))
         tot_form = df_items["ไม้แบบ (ตร.ม.)"].sum() if "ไม้แบบ (ตร.ม.)" in df_items else 0.0
         tot_mat = df_items["ค่าวัสดุ (บาท)"].sum() if "ค่าวัสดุ (บาท)" in df_items else 0.0
         tot_lab = df_items["ค่าแรง (บาท)"].sum() if "ค่าแรง (บาท)" in df_items else 0.0
 
         col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
         col_m1.metric("คอนกรีตรวม", f"{tot_conc:,.2f} ลบ.ม.")
-        col_m2.metric("เหล็กเสริมรวม", f"{tot_steel:,.2f} กก.")
-        col_m3.metric("ไม้แบบรวม", f"{tot_form:,.2f} ตร.ม.")
+        col_m2.metric("เหล็กเสริมรวม", f"{tot_rebar:,.2f} กก.")
+        col_m3.metric("โครงเหล็กหลังคา", f"{tot_roof_steel:,.2f} กก.")
         col_m4.metric("ค่าวัสดุรวม", f"฿{tot_mat:,.2f}")
         col_m5.metric("ค่าแรงรวม", f"฿{tot_lab:,.2f}")
 
         st.markdown("---")
         st.subheader("📋 รายการถอดแบบทั้งหมด")
+        st.caption("หมายเหตุ: รายการที่สร้างจาก V6.7 หรือต่ำกว่าอาจไม่มีข้อมูลปริมาณสุทธิแยกจาก Waste; ข้อมูลใหม่ใน V6.8 จะแยกปริมาณสุทธิและปริมาณจัดซื้อให้ชัดเจน")
         
         st.dataframe(df_items, use_container_width=True)
 
@@ -1242,6 +1367,13 @@ with tabs[10]:
         st.info("ยังไม่มีรายการถอดแบบในโครงการนี้")
     else:
         df_items = pd.DataFrame(current_proj["items"])
+        for _col in ["ค่าวัสดุ (บาท)", "ค่าแรง (บาท)"]:
+            if _col not in df_items.columns:
+                df_items[_col] = 0.0
+            df_items[_col] = pd.to_numeric(df_items[_col], errors="coerce").fillna(0.0)
+        
+        st.markdown("#### 📄 BOQ รายการย่อย")
+        st.dataframe(df_items, use_container_width=True, hide_index=True)
         
         grouped = df_items.groupby("หมวด").agg({
             "ค่าวัสดุ (บาท)": "sum",
@@ -1282,7 +1414,33 @@ with tabs[11]:
         st.info("ยังไม่มีข้อมูลโครงการเพื่อแสดงผลภาพรวม")
     else:
         df_items = pd.DataFrame(current_proj["items"])
+        for _col in ["คอนกรีต (ลบ.ม.)", "เหล็ก (กก.)", "ไม้แบบ (ตร.ม.)", "ค่าวัสดุ (บาท)", "ค่าแรง (บาท)"]:
+            if _col not in df_items.columns:
+                df_items[_col] = 0.0
+            df_items[_col] = pd.to_numeric(df_items[_col], errors="coerce").fillna(0.0)
+
+        tot_rebar = sum(sum_rebar_breakdown(current_proj.get("items", [])))
+        tot_roof_steel = sum_structural_steel(current_proj.get("items", []))
+        tot_conc = df_items["คอนกรีต (ลบ.ม.)"].sum()
+        tot_form = df_items["ไม้แบบ (ตร.ม.)"].sum()
+        tot_mat = df_items["ค่าวัสดุ (บาท)"].sum()
+        tot_lab = df_items["ค่าแรง (บาท)"].sum()
+
+        sm1, sm2, sm3, sm4, sm5 = st.columns(5)
+        sm1.metric("คอนกรีต", f"{tot_conc:,.2f} ลบ.ม.")
+        sm2.metric("เหล็กเสริม", f"{tot_rebar:,.2f} กก.")
+        sm3.metric("โครงเหล็กหลังคา", f"{tot_roof_steel:,.2f} กก.")
+        sm4.metric("ไม้แบบ", f"{tot_form:,.2f} ตร.ม.")
+        sm5.metric("ค่าวัสดุ+แรง", f"฿{tot_mat + tot_lab:,.0f}")
+
         grouped_chart = df_items.groupby("หมวด")[["ค่าวัสดุ (บาท)", "ค่าแรง (บาท)"]].sum()
-        
         st.bar_chart(grouped_chart)
         st.caption("สัดส่วนค่าวัสดุและค่าแรงเปรียบเทียบตามหมวดงาน")
+
+        steel_totals = sum_rebar_breakdown(current_proj.get("items", []))
+        if steel_totals or tot_roof_steel > 0:
+            st.markdown("#### 🔩 สรุปเหล็กเพื่อจัดซื้อ")
+            rows = [{"ชนิดเหล็ก": k, "น้ำหนัก (กก.)": round(v, 2)} for k, v in sorted(steel_totals.items())]
+            if tot_roof_steel > 0:
+                rows.append({"ชนิดเหล็ก": "โครงเหล็กหลังคา", "น้ำหนัก (กก.)": round(tot_roof_steel, 2)})
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
