@@ -833,10 +833,10 @@ with tabs[7]:
     st_c1, st_c2, st_c3 = st.columns(3)
     stair_w = st_c1.number_input("ความกว้างบันได (เมตร)", value=1.20, step=0.05, key="stair_w")
     num_steps = st_c2.number_input("จำนวนขั้นบันได (ขั้น)", min_value=1, value=10, key="num_steps")
-    step_r_cm = st_c3.number_input("ความสูงขั้นบันได (ซม.)", value=17.5, step=0.5, key="step_r_cm")
+    step_r_cm = st_c3.number_input("ลูกตั้ง (ซม.)", value=17.5, step=0.5, key="step_r_cm")
     
     st_c4, st_c5 = st.columns(2)
-    step_t_cm = st_c4.number_input("ความกว้างเหยียบ (ซม.)", value=25.0, step=1.0, key="step_t_cm")
+    step_t_cm = st_c4.number_input("ลูกนอน (ซม.)", value=25.0, step=1.0, key="step_t_cm")
     slab_th_cm = st_c5.number_input("ความหนาพื้นบันได (ซม.)", value=12.0, step=1.0, key="slab_th_cm")
 
     st.markdown("---")
