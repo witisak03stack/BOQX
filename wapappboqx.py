@@ -106,7 +106,7 @@ ROOF_MATERIAL_SPECS = {
     "หลังคาโซลาร์เซลล์ integrated (Solar Roof Tiles)": {"mat": 2500.0, "lab": 350.0, "steel_factor": 25.0}
 }
 
-# รายการประตู-หน้าต่างแบบละเอียด
+# รายการประตู-หน้าต่างแบบรายละเอียด
 DOOR_WINDOW_TYPES = [
     "ประตูไม้เนื้อแข็ง / กระจก พร้อมวงกบ & ฟิตติ้ง",
     "ประตูไม้สังเคราะห์ (UPVC / PVC)",
@@ -171,7 +171,7 @@ def add_takeoff_item(item_data):
         st.session_state["projects"][p_idx]["items"].append(item_data)
         st.success(f"บันทึกรายการ '{item_data['รายการ']}' เรียบร้อยแล้ว!")
     else:
-        st.error("⚠️️ กรุณาสร้างหรือเลือกโครงการก่อนทำการบันทึกข้อมูล!")
+        st.error("⚠ กรุณาสร้างหรือเลือกโครงการก่อนทำการบันทึกข้อมูล!")
 
 # ---------------------------------------------------------
 # 4. Sidebar Price & Material Settings
@@ -186,8 +186,11 @@ with st.sidebar:
     with st.expander("🧱 ราคาวัสดุ & ค่าแรงงานสถาปัตย์", expanded=False):
         st.markdown("**งานผนัง & ฉาบ**")
         p_brick_red = st.number_input("อิฐมอญครึ่งแผ่น (บาท/ตร.ม.)", value=180.0, step=10.0)
+        p_brick_red_full = st.number_input("อิฐมอญก่อเต็มแผ่น (บาท/ตร.ม.)", value=360.0, step=10.0)
         p_brick_light = st.number_input("อิฐมวลเบา 7.5 ซม. (บาท/ตร.ม.)", value=220.0, step=10.0)
+        p_brick_light_10 = st.number_input("อิฐมวลเบา 10 ซม. (บาท/ตร.ม.)", value=280.0, step=10.0)
         p_brick_block = st.number_input("อิฐบล็อก 7 ซม. (บาท/ตร.ม.)", value=150.0, step=10.0)
+        p_brick_block_10 = st.number_input("อิฐบล็อก 10 ซม. (บาท/ตร.ม.)", value=180.0, step=10.0)
         p_plaster_mat = st.number_input("ปูนฉาบสำเร็จรูป (บาท/ตร.ม.)", value=65.0, step=5.0)
         p_paint_mat = st.number_input("สีทาผนัง (บาท/ตร.ม.)", value=50.0, step=5.0)
         labour_masonry = st.number_input("ค่าแรงก่ออิฐ (บาท/ตร.ม.)", value=90.0, step=5.0)
@@ -232,6 +235,22 @@ with st.sidebar:
         waste_wall = st.number_input("เผื่ออิฐ/ปูนฉาบ (%)", value=5.0) / 100.0
         waste_roof = st.number_input("เผื่อหลังคา (%)", value=7.0) / 100.0
         waste_finishing = st.number_input("เผื่อกระเบื้อง/ฝ้า (%)", value=5.0) / 100.0
+
+# แผนที่ประเภทอิฐ/วัสดุก่อผนัง
+brick_price_map = {
+    "อิฐมอญครึ่งแผ่น (Mon Brick 1/2)": (p_brick_red, labour_masonry),
+    "อิฐมอญก่อเต็มแผ่น (Mon Brick Full)": (p_brick_red_full, labour_masonry * 1.4),
+    "อิฐมวลเบา 7.5 ซม. (Lightweight Concrete 7.5 cm)": (p_brick_light, labour_masonry),
+    "อิฐมวลเบา 10 ซม. (Lightweight Concrete 10 cm)": (p_brick_light_10, labour_masonry * 1.1),
+    "อิฐมวลเบา 12.5 - 15 ซม. (Lightweight Concrete 12.5-15 cm)": (380.0, labour_masonry * 1.2),
+    "อิฐบล็อก 7 ซม. (Concrete Block 7 cm)": (p_brick_block, labour_masonry * 0.9),
+    "อิฐบล็อก 10 ซม. (Concrete Block 10 cm)": (p_brick_block_10, labour_masonry),
+    "อิฐบล็อก 15 ซม. (Concrete Block 15 cm)": (240.0, labour_masonry * 1.1),
+    "อิฐโชว์แนว (Facing Brick)": (450.0, 180.0),
+    "บล็อกช่องลม / อิฐช่องลม (Ventilation Block)": (350.0, 120.0),
+    "ผนังเบาสมาร์ทบอร์ด / ไฟเบอร์ซีเมนต์ 8 มม. (2 ด้าน)": (380.0, 120.0),
+    "ผนังยิปซัมบอร์ด 12 มม. โครงคร่าวเหล็ก (2 ด้าน)": (320.0, 100.0)
+}
 
 pile_price_map = {
     "เสาเข็มหกเหลี่ยมกลวง": (p_pile_hex, labour_pile_press),
@@ -407,7 +426,7 @@ with tabs[1]:
     for idx, r in enumerate(st.session_state["footing_rebars"]):
         c1, c2, c3, c4, c5 = st.columns([1.5, 2, 2, 2, 0.5])
         r["type"] = c1.selectbox(f"ชนิดเหล็ก #{idx+1}", REBAR_LIST, index=REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 2, key=f"f_type_{idx}")
-        r["mode"] = c2.selectbox(f"โหมด #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r["mode"] == "จำนวน (เส้น)" else 1, key=f"f_mode_{idx}")
+        r["mode"] = c2.selectbox(f"จำนวน/ระยะห่าง #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r["mode"] == "จำนวน (เส้น)" else 1, key=f"f_mode_{idx}")
         r["val"] = c3.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"f_val_{idx}")
         r["len"] = c4.number_input(f"ยาว (ม.) #{idx+1}", value=float(r["len"]), key=f"f_len_{idx}")
         
@@ -531,7 +550,7 @@ with tabs[2]:
         r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=type_idx, key=f"c_type_{idx}")
         
         mode_idx = 0 if r["mode"] == "จำนวน (เส้น)" else 1
-        r["mode"] = c3.selectbox(f"โหมด #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=mode_idx, key=f"c_mode_{idx}")
+        r["mode"] = c3.selectbox(f"จำนวน/ระยะห่าง #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=mode_idx, key=f"c_mode_{idx}")
         
         r["val"] = c4.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"c_val_{idx}")
         
@@ -623,7 +642,7 @@ with tabs[3]:
         r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=type_idx, key=f"b_type_{idx}")
         
         mode_idx = 0 if r["mode"] == "จำนวน (เส้น)" else 1
-        r["mode"] = c3.selectbox(f"โหมด #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=mode_idx, key=f"b_mode_{idx}")
+        r["mode"] = c3.selectbox(f"จำนวน/ระยะห่าง #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=mode_idx, key=f"b_mode_{idx}")
         
         r["val"] = c4.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"b_val_{idx}")
         
@@ -722,19 +741,15 @@ with tabs[4]:
         })
 
 # =========================================================
-# TAB 6: 🧱 ผนัง & ตกแต่ง (UPDATED)
+# TAB 6: 🧱 ผนัง & ตกแต่ง
 # =========================================================
 with tabs[5]:
     st.subheader(f"🧱 ถอดปริมาณงานผนัง ประตู-หน้าต่าง และพื้นผิวตกแต่ง — [{active_proj_name}]")
     
     with st.expander("🧱 1. งานก่ออิฐ - ฉาบปูน - เสาเอ็น-คานทับหลัง", expanded=True):
-        w1, w2, w3 = st.columns([1.5, 1.5, 1])
+        w1, w2, w3 = st.columns([1.5, 2.0, 1])
         wall_name = w1.text_input("ชื่อ/สัญลักษณ์ผนัง", value="W1", key="wall_name")
-        brick_type = w2.selectbox("ประเภทอิฐ/วัสดุก่อ", [
-            "อิฐมอญครึ่งแผ่น (Mon Brick 1/2)",
-            "อิฐมวลเบา 7.5 ซม. (Lightweight Concrete)",
-            "อิฐบล็อก 7 ซม. (Concrete Block)"
-        ], key="brick_type")
+        brick_type = w2.selectbox("ประเภทอิฐ/วัสดุก่อ", list(brick_price_map.keys()), key="brick_type")
         wall_qty = w3.number_input("จำนวนผนังชุดนี้ (ผืน)", min_value=1, value=1, key="wall_qty")
 
         wm1, wm2 = st.columns(2)
@@ -758,9 +773,9 @@ with tabs[5]:
             deduct_area = (deduct_w * deduct_h * deduct_qty) * wall_qty
             net_masonry_area = max(0.0, gross_area - deduct_area) * (1 + waste_wall)
 
-            p_brick = p_brick_red if "อิฐมอญ" in brick_type else (p_brick_light if "อิฐมวลเบา" in brick_type else p_brick_block)
+            p_brick, lab_masonry_used = brick_price_map.get(brick_type, (p_brick_red, labour_masonry))
             cost_masonry_mat = net_masonry_area * p_brick
-            cost_masonry_lab = net_masonry_area * labour_masonry
+            cost_masonry_lab = net_masonry_area * lab_masonry_used
 
             plaster_mult = 2.0 if "2 ด้าน" in plaster_sides else (1.0 if "1 ด้าน" in plaster_sides else 0.0)
             net_plaster_area = max(0.0, gross_area - deduct_area) * plaster_mult * (1 + waste_wall)
@@ -971,18 +986,14 @@ with tabs[7]:
         })
 
 # =========================================================
-# TAB 9: ⛺ หลังคา (UPDATED)
+# TAB 9: ⛺ หลังคา
 # =========================================================
 with tabs[8]:
     st.subheader(f"⛺ ถอดปริมาณงานหลังคา (แยกทรงหลังคา & วัสดุมุง) — [{active_proj_name}]")
     
     r1, r2, r3 = st.columns([1, 1.5, 1.5])
     roof_name = r1.text_input("ชื่อ/สัญลักษณ์หลังคา", value="R1", key="roof_name")
-    
-    # 1. ประเภททรงหลังคา (Roof Form Factor)
     roof_shape = r2.selectbox("ประเภททรงหลังคา (Roof Form Factor)", list(ROOF_SHAPE_FACTORS.keys()), key="roof_shape")
-    
-    # 2. ประเภทวัสดุมุงหลังคา (Roof Material Type)
     roof_material = r3.selectbox("ประเภทวัสดุมุง (Roof Material Type)", list(ROOF_MATERIAL_SPECS.keys()), key="roof_material")
 
     rc1, rc2, rc3, rc4 = st.columns(4)
@@ -991,7 +1002,6 @@ with tabs[8]:
     roof_pitch = rc3.number_input("ความชันหลังคา (องศา °)", min_value=0.0, max_value=85.0, value=30.0, step=1.0, key="roof_pitch")
     ridge_len = rc4.number_input("ความยาวครอบสัน/ตะเข้สันรวม (เมตร)", value=25.0, step=1.0, key="ridge_len")
 
-    # คำนวณ Factor Slope + Form Factor
     shape_factor = ROOF_SHAPE_FACTORS.get(roof_shape, 1.10)
     mat_spec = ROOF_MATERIAL_SPECS.get(roof_material, {"mat": 300.0, "lab": 120.0, "steel_factor": 20.0})
 
@@ -1000,7 +1010,6 @@ with tabs[8]:
     cos_val = math.cos(rad)
     pitch_slope_factor = 1.0 / cos_val if cos_val > 0.001 else 1.0
     
-    # พื้นที่มุงจริง คำนวณจาก (พื้นที่ราบ * Factor ความชัน * Factor ทรงหลังคา)
     real_roof_area = plan_area * pitch_slope_factor * shape_factor
 
     st.info(f"💡 **ประเมินพื้นที่มุงจริง**: {real_roof_area:.2f} ตร.ม. (พื้นที่ราบ {plan_area:.1f} ตร.ม. × Factor มุมเอียง {pitch_slope_factor:.3f} × Factor ทรงหลังคา {shape_factor:.2f})")
@@ -1013,235 +1022,109 @@ with tabs[8]:
         p_tile = mat_spec["mat"]
         l_tile = mat_spec["lab"]
 
-        mat_cost = (tile_area * p_tile) + (tot_steel_weight * p_rb9) + (ridge_len * p_roof_cap)
-        lab_cost = (tile_area * l_tile) + (tot_steel_weight * labour_rebar)
+        mat_roof_tiles = tile_area * p_tile
+        lab_roof_tiles = tile_area * l_tile
+        
+        mat_ridge = ridge_len * p_roof_cap
+        lab_ridge = ridge_len * 60.0
+
+        mat_steel = tot_steel_weight * p_rb9
+        lab_steel = tot_steel_weight * labour_rebar
+
+        total_roof_mat = mat_roof_tiles + mat_ridge + mat_steel
+        total_roof_lab = lab_roof_tiles + lab_ridge + lab_steel
 
         add_takeoff_item({
             "หมวด": "งานหลังคา",
             "รายการ": roof_name,
-            "รายละเอียด": f"{roof_shape} | {roof_material} | มุงจริง {real_roof_area:.1f} ตร.ม. (ครอบ {ridge_len:.1f} ม.)",
+            "รายละเอียด": f"{roof_shape} | {roof_material} (พื้นที่มุงเผื่อ: {tile_area:.1f} ตร.ม. | โครงเหล็ก: {tot_steel_weight:.1f} กก.)",
             "จำนวน": 1,
             "คอนกรีต (ลบ.ม.)": 0.0,
             "เหล็ก (กก.)": round(tot_steel_weight, 2),
-            "เหล็กแยกชนิด": {"RB9": round(tot_steel_weight, 2)},
             "ไม้แบบ (ตร.ม.)": 0.0,
-            "ค่าวัสดุ (บาท)": round(mat_cost, 2),
-            "ค่าแรง (บาท)": round(lab_cost, 2)
+            "พื้นที่หลังคา (ตร.ม.)": round(tile_area, 2),
+            "ค่าวัสดุ (บาท)": round(total_roof_mat, 2),
+            "ค่าแรง (บาท)": round(total_roof_lab, 2)
         })
 
 # =========================================================
 # TAB 10: 🧮 คำนวณ
 # =========================================================
 with tabs[9]:
-    st.subheader(f"🧮 สรุปปริมาณวัสดุก่อสร้างรวมละเอียดยิบ — [{active_proj_name}]")
-    items = current_proj.get("items", []) if current_proj else []
-    
-    if items:
-        tot_concrete = sum(item.get("คอนกรีต (ลบ.ม.)", 0.0) for item in items)
-        tot_formwork = sum(item.get("ไม้แบบ (ตร.ม.)", 0.0) for item in items)
-        tot_rebar_weight = sum(item.get("เหล็ก (กก.)", 0.0) for item in items)
-        tot_excavation = sum(item.get("ดินขุด (ลบ.ม.)", 0.0) for item in items)
-        tot_backfill = sum(item.get("ดินถม (ลบ.ม.)", 0.0) for item in items)
-        tot_masonry_area = sum(item.get("พื้นที่ก่อ (ตร.ม.)", 0.0) for item in items)
-        tot_plaster_area = sum(item.get("พื้นที่ฉาบ (ตร.ม.)", 0.0) for item in items)
-        tot_floor_area = sum(item.get("พื้นที่ปูพื้น (ตร.ม.)", 0.0) for item in items)
-        tot_ceiling_area = sum(item.get("พื้นที่ฝ้า (ตร.ม.)", 0.0) for item in items)
-
-        rebar_by_type = {size: 0.0 for size in REBAR_LIST}
-        for item in items:
-            breakdown = item.get("เหล็กแยกชนิด", {})
-            for size, weight in breakdown.items():
-                if size in rebar_by_type:
-                    rebar_by_type[size] += weight
-                else:
-                    rebar_by_type[size] = weight
-
-        binding_wire = tot_rebar_weight * 0.030
-        nails_kg = tot_formwork * 0.30
-        plywood_sheets = math.ceil(tot_formwork / 2.88) if tot_formwork > 0 else 0
-
-        st.markdown("#### 📦 1. สรุปปริมาณวัสดุโครงสร้างหลัก & วัสดุสิ้นเปลือง")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("คอนกรีตรวม (รวมเสาเอ็น)", f"{tot_concrete:,.2f} ลบ.ม.")
-        m2.metric("ไม้แบบรวม", f"{tot_formwork:,.2f} ตร.ม.", f"≈ {plywood_sheets} แผ่น")
-        m3.metric("ลวดผูกเหล็ก #18", f"{binding_wire:,.2f} กก.")
-        m4.metric("ตะปูตอกไม้แบบ", f"{nails_kg:,.2f} กก.")
-
-        st.markdown("---")
-        st.markdown("#### 🔩 2. สรุปปริมาณเหล็กเสริมแยกตามขนาดมาตรฐาน (กก. & เส้น)")
-        
-        rebar_data = []
-        for size in sorted(rebar_by_type.keys()):
-            w = rebar_by_type[size]
-            unit_w = REBAR_WEIGHT.get(size, 1.0)
-            bars_9m = w / (unit_w * 9.0) if (w > 0 and unit_w > 0) else 0
-            rebar_data.append({
-                "ชนิดเหล็ก": size,
-                "น้ำหนักรวม (กก.)": round(w, 2),
-                "น้ำหนัก/เมตร (กก./ม.)": unit_w,
-                "จำนวนประมาณการ (เส้น 9 ม.)": math.ceil(bars_9m)
-            })
-
-        df_rebar = pd.DataFrame(rebar_data)
-        st.dataframe(df_rebar.style.format({
-            "น้ำหนักรวม (กก.)": "{:,.2f}",
-            "น้ำหนัก/เมตร (กก./ม.)": "{:.3f}",
-            "จำนวนประมาณการ (เส้น 9 ม.)": "{:,}"
-        }), use_container_width=True)
-
-        if tot_masonry_area > 0 or tot_floor_area > 0 or tot_ceiling_area > 0:
-            st.markdown("---")
-            st.markdown("#### 🧱 3. สรุปปริมาณงานสถาปัตยกรรม")
-            w_col1, w_col2, w_col3, w_col4 = st.columns(4)
-            w_col1.metric("พื้นที่ก่ออิฐรวม", f"{tot_masonry_area:,.2f} ตร.ม.")
-            w_col2.metric("พื้นที่ฉาบปูนรวม", f"{tot_plaster_area:,.2f} ตร.ม.")
-            w_col3.metric("พื้นที่ปูพื้นรวม", f"{tot_floor_area:,.2f} ตร.ม.")
-            w_col4.metric("พื้นที่ฝ้าเพดานรวม", f"{tot_ceiling_area:,.2f} ตร.ม.")
-
-        st.markdown("---")
-        st.markdown("#### 📋 4. รายการคำนวณทั้งหมดในโครงการ")
-        
-        display_items = []
-        for it in items:
-            it_copy = it.copy()
-            if "เหล็กแยกชนิด" in it_copy:
-                del it_copy["เหล็กแยกชนิด"]
-            display_items.append(it_copy)
-
-        df_all = pd.DataFrame(display_items)
-        st.dataframe(df_all, use_container_width=True)
-        
-        c_del1, c_del2, _ = st.columns([2.5, 3.5, 6])
-        if c_del1.button("↩️ ลบรายการล่าสุด (Undo)", type="secondary"):
-            p_idx = get_current_project_index()
-            if p_idx != -1 and len(st.session_state["projects"][p_idx]["items"]) > 0:
-                removed_item = st.session_state["projects"][p_idx]["items"].pop()
-                st.toast(f"ลบรายการ '{removed_item.get('รายการ')}' เรียบร้อยแล้ว")
-                st.rerun()
-
-        if c_del2.button("🗑 ลบรายการทั้งหมดในโครงการนี้", type="secondary"):
-            p_idx = get_current_project_index()
-            if p_idx != -1:
-                st.session_state["projects"][p_idx]["items"] = []
-                st.rerun()
+    st.subheader(f"🧮 คำนวณสรุปปริมาณวัสดุรวม — [{active_proj_name}]")
+    if not current_proj or not current_proj.get("items"):
+        st.info("ยังไม่มีรายการถอดแบบในโครงการนี้")
     else:
-        st.info("ยังไม่มีรายการถอดแบบในโครงการนี้ กรุณากรอกข้อมูลใน Tab หมวดงานต่างๆ ด้านบน")
+        df_items = pd.DataFrame(current_proj["items"])
+        
+        tot_conc = df_items["คอนกรีต (ลบ.ม.)"].sum() if "คอนกรีต (ลบ.ม.)" in df_items else 0.0
+        tot_steel = df_items["เหล็ก (กก.)"].sum() if "เหล็ก (กก.)" in df_items else 0.0
+        tot_form = df_items["ไม้แบบ (ตร.ม.)"].sum() if "ไม้แบบ (ตร.ม.)" in df_items else 0.0
+        tot_mat = df_items["ค่าวัสดุ (บาท)"].sum() if "ค่าวัสดุ (บาท)" in df_items else 0.0
+        tot_lab = df_items["ค่าแรง (บาท)"].sum() if "ค่าแรง (บาท)" in df_items else 0.0
+
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+        col_m1.metric("คอนกรีตรวม", f"{tot_conc:,.2f} ลบ.ม.")
+        col_m2.metric("เหล็กเสริมรวม", f"{tot_steel:,.2f} กก.")
+        col_m3.metric("ไม้แบบรวม", f"{tot_form:,.2f} ตร.ม.")
+        col_m4.metric("ค่าวัสดุรวม", f"฿{tot_mat:,.2f}")
+        col_m5.metric("ค่าแรงรวม", f"฿{tot_lab:,.2f}")
+
+        st.markdown("---")
+        st.subheader("📋 รายการถอดแบบทั้งหมด")
+        
+        st.dataframe(df_items, use_container_width=True)
 
 # =========================================================
 # TAB 11: 📋 BOQ
 # =========================================================
 with tabs[10]:
-    st.subheader(f"📋 ตาราง BOQ (Bill of Quantities) — [{active_proj_name}]")
-    items = current_proj.get("items", []) if current_proj else []
-    
-    if items:
-        df = pd.DataFrame(items)
-        df["ค่าวัสดุ (บาท)"] = df["ค่าวัสดุ (บาท)"].fillna(0.0)
-        df["ค่าแรง (บาท)"] = df["ค่าแรง (บาท)"].fillna(0.0)
-        df["รวมเป็นเงิน (บาท)"] = df["ค่าวัสดุ (บาท)"] + df["ค่าแรง (บาท)"]
+    st.subheader(f"📋 สรุปรายการ BOQ แยกหมวดงาน — [{active_proj_name}]")
+    if not current_proj or not current_proj.get("items"):
+        st.info("ยังไม่มีรายการถอดแบบในโครงการนี้")
+    else:
+        df_items = pd.DataFrame(current_proj["items"])
         
-        show_cols = ["หมวด", "รายการ", "รายละเอียด", "จำนวน", "ค่าวัสดุ (บาท)", "ค่าแรง (บาท)", "รวมเป็นเงิน (บาท)"]
-        formatted_df = df[show_cols].copy()
-        
-        st.dataframe(
-            formatted_df.style.format({
-                "ค่าวัสดุ (บาท)": "{:,.2f}",
-                "ค่าแรง (บาท)": "{:,.2f}",
-                "รวมเป็นเงิน (บาท)": "{:,.2f}"
-            }), 
-            use_container_width=True
-        )
+        grouped = df_items.groupby("หมวด").agg({
+            "ค่าวัสดุ (บาท)": "sum",
+            "ค่าแรง (บาท)": "sum"
+        }).reset_index()
 
-        subtotal_mat = df["ค่าวัสดุ (บาท)"].sum()
-        subtotal_lab = df["ค่าแรง (บาท)"].sum()
-        subtotal_direct = subtotal_mat + subtotal_lab
+        grouped["รวมเงิน (บาท)"] = grouped["ค่าวัสดุ (บาท)"] + grouped["ค่าแรง (บาท)"]
         
-        overhead_amount = subtotal_direct * profit_percent
-        subtotal_with_overhead = subtotal_direct + overhead_amount
-        vat_amount = subtotal_with_overhead * 0.07 if use_vat else 0.0
-        grand_total_boq = subtotal_with_overhead + vat_amount
+        subtotal_mat = grouped["ค่าวัสดุ (บาท)"].sum()
+        subtotal_lab = grouped["ค่าแรง (บาท)"].sum()
+        subtotal_direct = subtotal_mat + subtotal_lab
+
+        profit_amount = subtotal_direct * profit_percent
+        vat_amount = (subtotal_direct + profit_amount) * 0.07 if use_vat else 0.0
+        grand_total = subtotal_direct + profit_amount + vat_amount
+
+        st.dataframe(grouped.style.format({
+            "ค่าวัสดุ (บาท)": "{:,.2f}",
+            "ค่าแรง (บาท)": "{:,.2f}",
+            "รวมเงิน (บาท)": "{:,.2f}"
+        }), use_container_width=True)
 
         st.markdown("---")
-        st.markdown("### 💰 สรุปรวมงบประมาณ BOQ")
-        
-        b_c1, b_c2, b_c3 = st.columns(3)
-        b_c1.metric("1. ค่างานต้นทุนตรง (วัสดุ+ค่าแรง)", f"฿{subtotal_direct:,.2f}")
-        b_c2.metric(f"2. ค่าดำเนินการ & กำไร ({profit_percent*100:.0f}%)", f"฿{overhead_amount:,.2f}")
-        b_c3.metric("3. ภาษีมูลค่าเพิ่ม (VAT 7%)", f"฿{vat_amount:,.2f}" if use_vat else "฿0.00 (ไม่คิด VAT)")
-        
-        st.subheader(f"💵 สรุปยอดสุทธิทั้งสิ้น (Grand Total): ฿{grand_total_boq:,.2f}")
-
-        try:
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                formatted_df.to_excel(writer, index=False, sheet_name='BOQ_Data')
-                
-                cat_summary = df.groupby("หมวด")[["ค่าวัสดุ (บาท)", "ค่าแรง (บาท)", "รวมเป็นเงิน (บาท)"]].sum().reset_index()
-                cat_summary.to_excel(writer, index=False, sheet_name='หมวดงาน')
-
-                summary_data = [
-                    {"รายการ": "รวมค่าวัสดุทั้งหมด", "จำนวนเงิน (บาท)": subtotal_mat},
-                    {"รายการ": "รวมค่าแรงทั้งหมด", "จำนวนเงิน (บาท)": subtotal_lab},
-                    {"รายการ": "รวมค่างานต้นทุนตรง (Direct Cost)", "จำนวนเงิน (บาท)": subtotal_direct},
-                    {"รายการ": f"ค่าดำเนินการและกำไร ({profit_percent*100:.0f}%)", "จำนวนเงิน (บาท)": overhead_amount},
-                    {"รายการ": "ภาษีมูลค่าเพิ่ม VAT 7%", "จำนวนเงิน (บาท)": vat_amount},
-                    {"รายการ": "รวมงบประมาณทั้งสิ้น (Grand Total)", "จำนวนเงิน (บาท)": grand_total_boq}
-                ]
-                pd.DataFrame(summary_data).to_excel(writer, index=False, sheet_name='Summary')
-
-            excel_data = output.getvalue()
-            
-            st.download_button(
-                label="📥 ดาวน์โหลดตาราง BOQ เป็นไฟล์ Excel (.xlsx)",
-                data=excel_data,
-                file_name=f"BOQ_{active_proj_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
-        except Exception:
-            st.error("⚠️ ไม่สามารถสร้างไฟล์ Excel ได้ กรุณาตรวจสอบว่าได้ติดตั้ง 'openpyxl' แล้วหรือยัง (pip install openpyxl)")
-    else:
-        st.warning("ยังไม่มีรายการ BOQ ในโครงการนี้")
+        b_c1, b_c2 = st.columns([2, 1])
+        with b_c2:
+            st.markdown(f"**รวมค่าวัสดุและค่าแรงขั้นต้น**: {subtotal_direct:,.2f} บาท")
+            st.markdown(f"**ค่าดำเนินการ & กำไร ({profit_percent*100:.1f}%)**: {profit_amount:,.2f} บาท")
+            if use_vat:
+                st.markdown(f"**ภาษีมูลค่าเพิ่ม VAT 7%**: {vat_amount:,.2f} บาท")
+            st.markdown(f"### **ราคารวมสุทธิ: {grand_total:,.2f} บาท**")
 
 # =========================================================
 # TAB 12: 📊 สรุป
 # =========================================================
 with tabs[11]:
-    st.subheader(f"📊 สรุปงบประมาณรวมทั้งโครงการ — [{active_proj_name}]")
-    items = current_proj.get("items", []) if current_proj else []
-    
-    if items:
-        df = pd.DataFrame(items)
-        subtotal_mat = df["ค่าวัสดุ (บาท)"].sum() if "ค่าวัสดุ (บาท)" in df else 0.0
-        subtotal_lab = df["ค่าแรง (บาท)"].sum() if "ค่าแรง (บาท)" in df else 0.0
-        subtotal_direct = subtotal_mat + subtotal_lab
-        
-        overhead_amount = subtotal_direct * profit_percent
-        subtotal_with_overhead = subtotal_direct + overhead_amount
-        vat_amount = subtotal_with_overhead * 0.07 if use_vat else 0.0
-        grand_total_boq = subtotal_with_overhead + vat_amount
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("รวมค่าวัสดุ", f"฿{subtotal_mat:,.2f}")
-        m2.metric("รวมค่าแรง", f"฿{subtotal_lab:,.2f}")
-        m3.metric("ค่าดำเนินการ & กำไร", f"฿{overhead_amount:,.2f}")
-        m4.metric("ภาษี VAT 7%", f"฿{vat_amount:,.2f}")
-
-        st.markdown("---")
-        st.subheader("📊 สัดส่วนงบประมาณแยกตามหมวดงาน")
-        
-        cat_df = df.groupby("หมวด")[["ค่าวัสดุ (บาท)", "ค่าแรง (บาท)"]].sum()
-        cat_df["รวมทั้งสิ้น (บาท)"] = cat_df["ค่าวัสดุ (บาท)"] + cat_df["ค่าแรง (บาท)"]
-        cat_df["สัดส่วน (%)"] = (cat_df["รวมทั้งสิ้น (บาท)"] / (subtotal_direct if subtotal_direct > 0 else 1) * 100).round(2)
-        
-        st.dataframe(cat_df.style.format({
-            "ค่าวัสดุ (บาท)": "฿{:,.2f}",
-            "ค่าแรง (บาท)": "฿{:,.2f}",
-            "รวมทั้งสิ้น (บาท)": "฿{:,.2f}",
-            "สัดส่วน (%)": "{:.2f}%"
-        }), use_container_width=True)
-
-        st.markdown("---")
-        st.metric("💰 งบประมาณรวมทั้งสิ้นสำหรับจัดซื้อจัดจ้าง", f"฿{grand_total_boq:,.2f}")
+    st.subheader(f"📊 ภาพรวมและสรุปสถิติโครงการ — [{active_proj_name}]")
+    if not current_proj or not current_proj.get("items"):
+        st.info("ยังไม่มีข้อมูลโครงการเพื่อแสดงผลภาพรวม")
     else:
-        st.info("กรุณาเพิ่มรายการถอดแบบเพื่อดูสรุปภาพรวมงบประมาณ")
+        df_items = pd.DataFrame(current_proj["items"])
+        grouped_chart = df_items.groupby("หมวด")[["ค่าวัสดุ (บาท)", "ค่าแรง (บาท)"]].sum()
+        
+        st.bar_chart(grouped_chart)
+        st.caption("สัดส่วนค่าวัสดุและค่าแรงเปรียบเทียบตามหมวดงาน")
