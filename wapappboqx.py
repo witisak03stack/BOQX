@@ -3,6 +3,7 @@ import pandas as pd
 import math
 import io
 import json
+import os
 
 # ---------------------------------------------------------
 # 1. Page Configuration & Custom CSS
@@ -121,13 +122,37 @@ DOOR_WINDOW_TYPES = [
 ]
 
 # ---------------------------------------------------------
-# 3. Session State Management
+# 3. Persistent Data Storage & Session State Management
 # ---------------------------------------------------------
+DATA_FILE = "projects_data.json"
+
+def load_projects():
+    """โหลดข้อมูลโครงการจากไฟล์ JSON"""
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            st.error(f"ไม่สามารถโหลดไฟล์ข้อมูลเดิมได้: {e}")
+            return []
+    return []
+
+def save_projects():
+    """บันทึกข้อมูลโครงการทั้งหมดลงไฟล์ JSON อัตโนมัติ"""
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(st.session_state["projects"], f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการบันทึกข้อมูลลงดิสก์: {e}")
+
 if "projects" not in st.session_state:
-    st.session_state["projects"] = []
+    st.session_state["projects"] = load_projects()
 
 if "current_project_id" not in st.session_state:
-    st.session_state["current_project_id"] = None
+    if st.session_state["projects"]:
+        st.session_state["current_project_id"] = st.session_state["projects"][0]["id"]
+    else:
+        st.session_state["current_project_id"] = None
 
 if "footing_rebars" not in st.session_state:
     st.session_state["footing_rebars"] = [
@@ -175,6 +200,7 @@ def add_takeoff_item(item_data):
         if "items" not in st.session_state["projects"][p_idx]:
             st.session_state["projects"][p_idx]["items"] = []
         st.session_state["projects"][p_idx]["items"].append(item_data)
+        save_projects()  # บันทึกลงดิสก์อัตโนมัติ
         st.success(f"บันทึกรายการ '{item_data['รายการ']}' เรียบร้อยแล้ว!")
     else:
         st.error("⚠ กรุณาสร้างหรือเลือกโครงการก่อนทำการบันทึกข้อมูล!")
@@ -183,7 +209,7 @@ def add_takeoff_item(item_data):
 # 4. Sidebar Price & Material Settings
 # ---------------------------------------------------------
 with st.sidebar:
-    st.title("⚙️️ ตั้งค่าราคาและค่าแรง")
+    st.title("⚙ ตั้งค่าราคาและค่าแรง")
     
     with st.expander("💼 ค่าดำเนินการ กำไร & ภาษี", expanded=True):
         profit_percent = st.number_input("ค่าดำเนินการ & กำไร (%)", value=10.0, step=1.0) / 100.0
@@ -338,6 +364,7 @@ with tabs[0]:
                         "items": []
                     })
                     st.session_state["current_project_id"] = new_id
+                    save_projects()  # บันทึกข้อมูลลงดิสก์ทันที
                     st.success(f"สร้างโครงการ '{new_name}' เรียบร้อยแล้ว!")
                     st.rerun()
 
@@ -360,6 +387,7 @@ with tabs[0]:
                 st.session_state["projects"] = data
                 if data:
                     st.session_state["current_project_id"] = data[0]["id"]
+                save_projects()  # บันทึกข้อมูลที่นำเข้าลงดิสก์
                 st.success("นำเข้าข้อมูลเรียบร้อยแล้ว!")
                 st.rerun()
             except Exception:
@@ -391,6 +419,7 @@ with tabs[0]:
                             st.session_state["projects"] = [p for p in st.session_state["projects"] if p["id"] != proj["id"]]
                             if is_active:
                                 st.session_state["current_project_id"] = st.session_state["projects"][0]["id"] if len(st.session_state["projects"]) > 0 else None
+                            save_projects()  # บันทึกการลบลงดิสก์
                             st.rerun()
                     st.markdown("---")
 
@@ -699,7 +728,7 @@ with tabs[3]:
         })
 
 # =========================================================
-# TAB 5: 🧱 พื้น (แก้ไขการเสริมเหล็กแบบไดนามิก)
+# TAB 5: 🧱 พื้น
 # =========================================================
 with tabs[4]:
     st.subheader(f"🧱 ถอดปริมาณงานพื้น — [{active_proj_name}]")
@@ -933,7 +962,7 @@ with tabs[5]:
             })
 
 # =========================================================
-# TAB 7: ☁️ ฝ้าเพดาน
+# TAB 7: ☁️️ ฝ้าเพดาน
 # =========================================================
 with tabs[6]:
     st.subheader(f"☁️ ถอดปริมาณงานฝ้าเพดาน — [{active_proj_name}]")
