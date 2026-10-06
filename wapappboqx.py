@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
 import math
+import io
 
 # ---------------------------------------------------------
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V4.1",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V6.2 (Bug Free)",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -123,20 +124,26 @@ def add_takeoff_item(item_data):
 with st.sidebar:
     st.title("⚙️ ตั้งค่าราคาและค่าแรง")
     
-    with st.expander("🧱 ราคาวัสดุ & ค่าแรงงานผนัง", expanded=True):
-        st.markdown("**ราคาวัสดุก่อผนัง**")
+    with st.expander("💼 ค่าดำเนินการ กำไร & ภาษี", expanded=True):
+        profit_percent = st.number_input("ค่าดำเนินการ & กำไร (%)", value=10.0, step=1.0) / 100.0
+        use_vat = st.checkbox("คิดภาษีมูลค่าเพิ่ม (VAT 7%)", value=True)
+
+    with st.expander("🧱 ราคาวัสดุ & ค่าแรงงานสถาปัตย์", expanded=False):
+        st.markdown("**งานผนัง & ฉาบ**")
         p_brick_red = st.number_input("อิฐมอญครึ่งแผ่น (บาท/ตร.ม.)", value=180.0, step=10.0)
         p_brick_light = st.number_input("อิฐมวลเบา 7.5 ซม. (บาท/ตร.ม.)", value=220.0, step=10.0)
         p_brick_block = st.number_input("อิฐบล็อก 7 ซม. (บาท/ตร.ม.)", value=150.0, step=10.0)
-        
-        st.markdown("**ราคาปูนฉาบ & สี (บาท/ตร.ม.)**")
         p_plaster_mat = st.number_input("ปูนฉาบสำเร็จรูป (บาท/ตร.ม.)", value=65.0, step=5.0)
         p_paint_mat = st.number_input("สีทาผนัง (บาท/ตร.ม.)", value=50.0, step=5.0)
-        
-        st.markdown("**ค่าแรงงานผนัง (บาท/ตร.ม.)**")
-        labour_masonry = st.number_input("ค่าแรงก่ออิฐ", value=90.0, step=5.0)
-        labour_plastering = st.number_input("ค่าแรงฉาบปูน", value=85.0, step=5.0)
-        labour_painting = st.number_input("ค่าแรงทาสี", value=45.0, step=5.0)
+        labour_masonry = st.number_input("ค่าแรงก่ออิฐ (บาท/ตร.ม.)", value=90.0, step=5.0)
+        labour_plastering = st.number_input("ค่าแรงฉาบปูน (บาท/ตร.ม.)", value=85.0, step=5.0)
+        labour_painting = st.number_input("ค่าแรงทาสี (บาท/ตร.ม.)", value=45.0, step=5.0)
+
+        st.markdown("**งานพื้น & ฝ้าเพดาน**")
+        p_tile_mat = st.number_input("กระเบื้องแกรนิตโต้ (บาท/ตร.ม.)", value=350.0, step=20.0)
+        labour_tile = st.number_input("ค่าแรงปูกระเบื้อง (บาท/ตร.ม.)", value=180.0, step=10.0)
+        p_ceiling_mat = st.number_input("ฝ้ายิปซัมฉาบเรียบ+โครง (บาท/ตร.ม.)", value=220.0, step=10.0)
+        labour_ceiling = st.number_input("ค่าแรงติดตั้งฝ้า (บาท/ตร.ม.)", value=100.0, step=10.0)
 
     with st.expander("🚜 ค่าแรงงานดินขุด-ดินถม", expanded=False):
         cost_excavation = st.number_input("ค่าขุดดิน (บาท/ลบ.ม.)", value=120.0, step=10.0)
@@ -171,6 +178,7 @@ with st.sidebar:
         waste_formwork = st.number_input("เผื่อไม้แบบ (%)", value=15.0) / 100.0
         waste_wall = st.number_input("เผื่ออิฐ/ปูนฉาบ (%)", value=5.0) / 100.0
         waste_roof = st.number_input("เผื่อหลังคา (%)", value=7.0) / 100.0
+        waste_finishing = st.number_input("เผื่อกระเบื้อง/ฝ้า (%)", value=5.0) / 100.0
 
 pile_price_map = {
     "เสาเข็มหกเหลี่ยมกลวง": (p_pile_hex, labour_pile_press),
@@ -191,15 +199,16 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 6. Navigation Tabs (สลับลำดับให้ ผนัง ต่อจาก พื้น)
+# 6. Navigation Tabs
 # ---------------------------------------------------------
 tabs = st.tabs([
     "📁 โครงการ", 
     "🦶 ฐานราก", 
-    "🏛️ เสา", 
+    "🏛️️ เสา", 
     "↔ คาน", 
     "🧱 พื้น", 
-    "🧱 ผนัง",
+    "🧱 ผนัง & ตกแต่ง",
+    "☁️ ฝ้าเพดาน",
     "🪜 บันได", 
     "⛺ หลังคา", 
     "🧮 คำนวณ", 
@@ -298,6 +307,7 @@ with tabs[1]:
 
     f_rebars_to_remove = []
     tot_footing_rebar_weight = 0.0
+    footing_rebar_detail = {}
 
     for idx, r in enumerate(st.session_state["footing_rebars"]):
         c1, c2, c3, c4, c5 = st.columns([1.5, 2, 2, 2, 0.5])
@@ -315,7 +325,9 @@ with tabs[1]:
             calc_count = (math.ceil(f_l / r["val"]) + 1) if r["val"] > 0 else 0
             total_len_row = calc_count * r["len"]
         
-        tot_footing_rebar_weight += (total_len_row * REBAR_WEIGHT[r["type"]])
+        w_row = total_len_row * REBAR_WEIGHT[r["type"]]
+        tot_footing_rebar_weight += w_row
+        footing_rebar_detail[r["type"]] = footing_rebar_detail.get(r["type"], 0.0) + w_row
 
     if f_rebars_to_remove:
         st.session_state["footing_rebars"] = [item for i, item in enumerate(st.session_state["footing_rebars"]) if i not in f_rebars_to_remove]
@@ -334,6 +346,8 @@ with tabs[1]:
         mat_c = vol_concrete * p_concrete + rebar_weight * p_db12 + formwork * p_formwork
         lab_c = vol_concrete * labour_concrete + rebar_weight * labour_rebar + formwork * labour_formwork
 
+        rebar_breakdown = {k: round(v * f_qty * (1 + waste_rebar), 2) for k, v in footing_rebar_detail.items()}
+
         add_takeoff_item({
             "หมวด": "งานดินขุด-ดินถม",
             "รายการ": f"งานดินสำหรับฐานราก {f_name}",
@@ -342,6 +356,8 @@ with tabs[1]:
             "คอนกรีต (ลบ.ม.)": 0.0,
             "เหล็ก (กก.)": 0.0,
             "ไม้แบบ (ตร.ม.)": 0.0,
+            "ดินขุด (ลบ.ม.)": round(vol_excavation, 2),
+            "ดินถม (ลบ.ม.)": round(vol_backfill, 2),
             "ค่าวัสดุ (บาท)": 0.0,
             "ค่าแรง (บาท)": round((vol_excavation * cost_excavation) + (vol_backfill * cost_backfill), 2)
         })
@@ -372,6 +388,7 @@ with tabs[1]:
             "จำนวน": f_qty,
             "คอนกรีต (ลบ.ม.)": round(vol_concrete, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
+            "เหล็กแยกชนิด": rebar_breakdown,
             "ไม้แบบ (ตร.ม.)": round(formwork, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
@@ -402,6 +419,7 @@ with tabs[2]:
 
     c_rebars_to_remove = []
     tot_col_rebar_weight = 0.0
+    col_rebar_detail = {}
     col_pos_options = ["เหล็กแกน", "เหล็กปลอก", "เหล็กเสริมพิเศษ"]
 
     for idx, r in enumerate(st.session_state["column_rebars"]):
@@ -428,7 +446,9 @@ with tabs[2]:
             calc_count = (math.ceil(col_h / r["val"]) + 1) if r["val"] > 0 else 0
             total_len_row = calc_count * r["len"]
         
-        tot_col_rebar_weight += (total_len_row * REBAR_WEIGHT[r["type"]])
+        w_row = total_len_row * REBAR_WEIGHT[r["type"]]
+        tot_col_rebar_weight += w_row
+        col_rebar_detail[r["type"]] = col_rebar_detail.get(r["type"], 0.0) + w_row
 
     if c_rebars_to_remove:
         st.session_state["column_rebars"] = [item for i, item in enumerate(st.session_state["column_rebars"]) if i not in c_rebars_to_remove]
@@ -443,6 +463,8 @@ with tabs[2]:
         mat_c = vol * p_concrete + rebar_weight * p_db12 + form * p_formwork
         lab_c = vol * labour_concrete + rebar_weight * labour_rebar + form * labour_formwork
 
+        rebar_breakdown = {k: round(v * col_qty * (1 + waste_rebar), 2) for k, v in col_rebar_detail.items()}
+
         add_takeoff_item({
             "หมวด": "งานเสา",
             "รายการ": f"{col_name} ({col_level})",
@@ -450,13 +472,14 @@ with tabs[2]:
             "จำนวน": col_qty,
             "คอนกรีต (ลบ.ม.)": round(vol, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
+            "เหล็กแยกชนิด": rebar_breakdown,
             "ไม้แบบ (ตร.ม.)": round(form, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
         })
 
 # =========================================================
-# TAB 4: ↔️️ คาน
+# TAB 4: ↔ คาน
 # =========================================================
 with tabs[3]:
     st.subheader(f"↔️ ถอดปริมาณงานคาน — [{active_proj_name}]")
@@ -480,6 +503,7 @@ with tabs[3]:
 
     b_rebars_to_remove = []
     tot_beam_rebar_weight = 0.0
+    beam_rebar_detail = {}
     beam_pos_options = ["เหล็กบน", "เหล็กล่าง", "เหล็กเสริมพิเศษ", "เหล็กปลอก"]
 
     for idx, r in enumerate(st.session_state["beam_rebars"]):
@@ -506,7 +530,9 @@ with tabs[3]:
             calc_count = (math.ceil(beam_l / r["val"]) + 1) if r["val"] > 0 else 0
             total_len_row = calc_count * r["len"]
         
-        tot_beam_rebar_weight += (total_len_row * REBAR_WEIGHT[r["type"]])
+        w_row = total_len_row * REBAR_WEIGHT[r["type"]]
+        tot_beam_rebar_weight += w_row
+        beam_rebar_detail[r["type"]] = beam_rebar_detail.get(r["type"], 0.0) + w_row
 
     if b_rebars_to_remove:
         st.session_state["beam_rebars"] = [item for i, item in enumerate(st.session_state["beam_rebars"]) if i not in b_rebars_to_remove]
@@ -521,6 +547,8 @@ with tabs[3]:
         mat_c = vol * p_concrete + rebar_weight * p_db12 + form * p_formwork
         lab_c = vol * labour_concrete + rebar_weight * labour_rebar + form * labour_formwork
 
+        rebar_breakdown = {k: round(v * beam_qty * (1 + waste_rebar), 2) for k, v in beam_rebar_detail.items()}
+
         add_takeoff_item({
             "หมวด": "งานคาน",
             "รายการ": f"{beam_name} ({beam_level})",
@@ -528,6 +556,7 @@ with tabs[3]:
             "จำนวน": beam_qty,
             "คอนกรีต (ลบ.ม.)": round(vol, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
+            "เหล็กแยกชนิด": rebar_breakdown,
             "ไม้แบบ (ตร.ม.)": round(form, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
@@ -566,6 +595,8 @@ with tabs[4]:
         mat_c = vol * p_concrete + rebar_weight * p_s_rebar + form * p_formwork
         lab_c = vol * labour_concrete + rebar_weight * labour_rebar + form * labour_formwork
 
+        rebar_breakdown = {s_rebar_type: round(rebar_weight, 2)}
+
         add_takeoff_item({
             "หมวด": "งานพื้น",
             "รายการ": slab_name,
@@ -573,268 +604,14 @@ with tabs[4]:
             "จำนวน": slab_qty,
             "คอนกรีต (ลบ.ม.)": round(vol, 2),
             "เหล็ก (กก.)": round(rebar_weight, 2),
+            "เหล็กแยกชนิด": rebar_breakdown,
             "ไม้แบบ (ตร.ม.)": round(form, 2),
             "ค่าวัสดุ (บาท)": round(mat_c, 2),
             "ค่าแรง (บาท)": round(lab_c, 2)
         })
 
 # =========================================================
-# TAB 6: 🧱 ผนัง (ย้ายมาอยู่ต่อจากงานพื้น)
+# TAB 6: 🧱 ผนัง & ตกแต่ง
 # =========================================================
 with tabs[5]:
-    st.subheader(f"🧱 ถอดปริมาณงานผนังและฉาบปูน — [{active_proj_name}]")
-    
-    w1, w2, w3 = st.columns([1.5, 1.5, 1])
-    wall_name = w1.text_input("ชื่อ/สัญลักษณ์ผนัง", value="W1", key="wall_name")
-    brick_type = w2.selectbox("ประเภทอิฐ/วัสดุก่อ", [
-        "อิฐมอญครึ่งแผ่น (Mon Brick 1/2)",
-        "อิฐมวลเบา 7.5 ซม. (Lightweight Concrete)",
-        "อิฐบล็อก 7 ซม. (Concrete Block)"
-    ], key="brick_type")
-    wall_qty = w3.number_input("จำนวนผนังชุดนี้ (ผืน)", min_value=1, value=1, key="wall_qty")
-
-    wm1, wm2 = st.columns(2)
-    wall_l = wm1.number_input("ความยาวผนัง (เมตร)", value=4.00, step=0.10, key="wall_l")
-    wall_h = wm2.number_input("ความสูงผนัง (เมตร)", value=2.80, step=0.10, key="wall_h")
-
-    st.markdown("---")
-    st.markdown("#### 🚪 หักช่องเปิด (ประตู / หน้าต่าง)")
-    d1, d2, d3 = st.columns(3)
-    deduct_w = d1.number_input("ความกว้างช่องเปิดรวม (เมตร)", value=0.90, step=0.1, key="deduct_w")
-    deduct_h = d2.number_input("ความสูงช่องเปิดรวม (เมตร)", value=2.00, step=0.1, key="deduct_h")
-    deduct_qty = d3.number_input("จำนวนช่องเปิด (ช่อง)", min_value=0, value=1, key="deduct_qty")
-
-    st.markdown("---")
-    st.markdown("#### 🎨 งานฉาบปูน & งานทาสี")
-    p1, p2 = st.columns(2)
-    plaster_sides = p1.selectbox("งานฉาบปูน", ["ฉาบปูน 2 ด้าน", "ฉาบปูน 1 ด้าน", "ไม่คิดงานฉาบ"], key="plaster_sides")
-    paint_sides = p2.selectbox("งานทาสี", ["ทาสี 2 ด้าน", "ทาสี 1 ด้าน", "ไม่คิดงานทาสี"], key="paint_sides")
-
-    if st.button("➕ บันทึกงานผนัง", type="primary", key="btn_save_wall"):
-        gross_area = (wall_l * wall_h) * wall_qty
-        deduct_area = (deduct_w * deduct_h * deduct_qty) * wall_qty
-        net_masonry_area = max(0.0, gross_area - deduct_area) * (1 + waste_wall)
-
-        if "อิฐมอญ" in brick_type:
-            p_brick = p_brick_red
-        elif "อิฐมวลเบา" in brick_type:
-            p_brick = p_brick_light
-        else:
-            p_brick = p_brick_block
-
-        cost_masonry_mat = net_masonry_area * p_brick
-        cost_masonry_lab = net_masonry_area * labour_masonry
-
-        plaster_mult = 2.0 if "2 ด้าน" in plaster_sides else (1.0 if "1 ด้าน" in plaster_sides else 0.0)
-        net_plaster_area = max(0.0, gross_area - deduct_area) * plaster_mult * (1 + waste_wall)
-        
-        cost_plaster_mat = net_plaster_area * p_plaster_mat
-        cost_plaster_lab = net_plaster_area * labour_plastering
-
-        paint_mult = 2.0 if "2 ด้าน" in paint_sides else (1.0 if "1 ด้าน" in paint_sides else 0.0)
-        net_paint_area = max(0.0, gross_area - deduct_area) * paint_mult
-        
-        cost_paint_mat = net_paint_area * p_paint_mat
-        cost_paint_lab = net_paint_area * labour_painting
-
-        total_wall_mat = cost_masonry_mat + cost_plaster_mat + cost_paint_mat
-        total_wall_lab = cost_masonry_lab + cost_plaster_lab + cost_paint_lab
-
-        detail_txt = f"{brick_type} พื้นที่ก่อ {net_masonry_area:.1f} ตร.ม. (ฉาบ {net_plaster_area:.1f} ตร.ม.)"
-
-        add_takeoff_item({
-            "หมวด": "งานผนังและฉาบปูน",
-            "รายการ": wall_name,
-            "รายละเอียด": detail_txt,
-            "จำนวน": wall_qty,
-            "คอนกรีต (ลบ.ม.)": 0.0,
-            "เหล็ก (กก.)": 0.0,
-            "ไม้แบบ (ตร.ม.)": 0.0,
-            "ค่าวัสดุ (บาท)": round(total_wall_mat, 2),
-            "ค่าแรง (บาท)": round(total_wall_lab, 2)
-        })
-
-# =========================================================
-# TAB 7: 🪜 บันได
-# =========================================================
-with tabs[6]:
-    st.subheader(f"🪜 ถอดปริมาณงานบันได คสล. — [{active_proj_name}]")
-    
-    st1, st2 = st.columns(2)
-    stair_name = st1.text_input("ชื่อ/สัญลักษณ์บันได", value="ST1", key="stair_name")
-    stair_qty = st2.number_input("จำนวนชุดบันได", min_value=1, value=1, key="stair_qty")
-    
-    st_c1, st_c2, st_c3 = st.columns(3)
-    stair_w = st_c1.number_input("ความกว้างบันได (เมตร)", value=1.20, step=0.05, key="stair_w")
-    num_steps = st_c2.number_input("จำนวนขั้นบันได (ขั้น)", min_value=1, value=10, key="num_steps")
-    step_r_cm = st_c3.number_input("ความสูงขั้นบันได (ซม.)", value=17.5, step=0.5, key="step_r_cm")
-    
-    st_c4, st_c5 = st.columns(2)
-    step_t_cm = st_c4.number_input("ความกว้างเหยียบ (ซม.)", value=25.0, step=1.0, key="step_t_cm")
-    slab_th_cm = st_c5.number_input("ความหนาพื้นบันได (ซม.)", value=12.0, step=1.0, key="slab_th_cm")
-
-    st.markdown("---")
-    has_landing = st.checkbox("มีชานพักบันได (Landing)", value=True, key="has_landing")
-    land_w, land_l, land_th_cm = 0.0, 0.0, 12.0
-    if has_landing:
-        l_col1, l_col2, l_col3 = st.columns(3)
-        land_w = l_col1.number_input("กว้างชานพัก (เมตร)", value=1.20, step=0.1, key="land_w")
-        land_l = l_col2.number_input("ยาวชานพัก (เมตร)", value=2.40, step=0.1, key="land_l")
-        land_th_cm = l_col3.number_input("หนาชานพัก (ซม.)", value=12.0, step=1.0, key="land_th_cm")
-
-    st.markdown("#### 🥞 เหล็กเสริมบันได")
-    str_re1, str_re2 = st.columns(2)
-    stair_rebar_type = str_re1.selectbox("ขนาดเหล็กเสริมบันได", REBAR_LIST, index=2, key="stair_rebar_type")
-    stair_rebar_spacing = str_re2.number_input("ระยะห่าง @ (เมตร)", value=0.15, step=0.01, key="stair_rebar_spacing")
-
-    if st.button("➕ บันทึกงานบันได", type="primary", key="btn_save_stair"):
-        step_r = step_r_cm / 100.0
-        step_t = step_t_cm / 100.0
-        slab_th = slab_th_cm / 100.0
-        land_th = land_th_cm / 100.0
-
-        run_len = num_steps * step_t
-        rise_len = num_steps * step_r
-        inclined_len = math.sqrt(run_len**2 + rise_len**2)
-
-        vol_steps = (0.5 * step_r * step_t * stair_w) * num_steps
-        vol_slab = (inclined_len * stair_w * slab_th)
-        vol_landing = (land_w * land_l * land_th) if has_landing else 0.0
-        tot_vol = (vol_steps + vol_slab + vol_landing) * stair_qty * (1 + waste_concrete)
-        
-        form_bottom = inclined_len * stair_w
-        form_risers = num_steps * step_r * stair_w
-        form_sides = (0.5 * run_len * rise_len) * 2
-        form_landing = (land_w * land_l) + (2 * (land_w + land_l) * land_th) if has_landing else 0.0
-        tot_form = (form_bottom + form_risers + form_sides + form_landing) * stair_qty * (1 + waste_formwork)
-
-        num_main_bars = math.ceil(stair_w / stair_rebar_spacing) + 1
-        num_cross_bars = math.ceil(inclined_len / stair_rebar_spacing) + 1
-        stair_rebar_len = (num_main_bars * (inclined_len + 0.60)) + (num_cross_bars * stair_w)
-        tot_rebar_weight = stair_rebar_len * stair_qty * REBAR_WEIGHT[stair_rebar_type] * (1 + waste_rebar)
-
-        p_stair_rebar = p_db12 if "DB" in stair_rebar_type else p_rb9
-        mat_c = tot_vol * p_concrete + tot_rebar_weight * p_stair_rebar + tot_form * p_formwork
-        lab_c = tot_vol * labour_concrete + tot_rebar_weight * labour_rebar + tot_form * labour_formwork
-
-        detail_text = f"บันได {num_steps} ขั้น (กว้าง {stair_w:.2f}ม.) | เหล็ก {stair_rebar_type}@{stair_rebar_spacing:.2f}ม."
-        if has_landing:
-            detail_text += f" + ชานพัก {land_w:.2f}x{land_l:.2f}ม."
-
-        add_takeoff_item({
-            "หมวด": "งานบันได",
-            "รายการ": stair_name,
-            "รายละเอียด": detail_text,
-            "จำนวน": stair_qty,
-            "คอนกรีต (ลบ.ม.)": round(tot_vol, 2),
-            "เหล็ก (กก.)": round(tot_rebar_weight, 2),
-            "ไม้แบบ (ตร.ม.)": round(tot_form, 2),
-            "ค่าวัสดุ (บาท)": round(mat_c, 2),
-            "ค่าแรง (บาท)": round(lab_c, 2)
-        })
-
-# =========================================================
-# TAB 8: ⛺ หลังคา
-# =========================================================
-with tabs[7]:
-    st.subheader(f"⛺ ถอดปริมาณงานหลังคา (รองรับปั้นหยา/หลายจั่ว) — [{active_proj_name}]")
-    
-    r1, r2 = st.columns(2)
-    roof_name = r1.text_input("ชื่อ/สัญลักษณ์หลังคา", value="R1", key="roof_name")
-    roof_type = r2.selectbox("ประเภททรงหลังคา & วัสดุมุง", [
-        "หลังคาทรงปั้นหยา / หลายจั่ว (กระเบื้องซีแพค/เพรสทีจ)",
-        "หลังคาทรงจั่ว / หมาแหงน (กระเบื้องลอนคู่)",
-        "หลังคาทรงจั่ว / หมาแหงน (เมทัลชีท)"
-    ])
-
-    rc1, rc2, rc3 = st.columns(3)
-    plan_area = rc1.number_input("พื้นที่ราบรวมจากผัง Roof Plan (ตร.ม.)", value=120.0, step=5.0, key="plan_area")
-    roof_pitch = rc2.number_input("ความชันหลังคา (องศา °)", min_value=0.0, max_value=85.0, value=30.0, step=1.0, key="roof_pitch")
-    ridge_len = rc3.number_input("ความยาวครอบสันหลังคา/ตะเข้สันรวม (เมตร)", value=25.0, step=1.0, key="ridge_len")
-
-    rad = math.radians(roof_pitch)
-    cos_val = math.cos(rad)
-    slope_factor = 1.0 / cos_val if cos_val > 0.001 else 1.0
-    real_roof_area = plan_area * slope_factor
-
-    if st.button("➕ บันทึกงานหลังคา", type="primary", key="btn_save_roof"):
-        tile_area = real_roof_area * (1 + waste_roof)
-        steel_factor = 18.0 if "เมทัลชีท" in roof_type else 26.0
-        tot_steel_weight = real_roof_area * steel_factor * (1 + waste_rebar)
-
-        mat_cost = (tile_area * p_roof_tile) + (tot_steel_weight * p_rb9) + (ridge_len * p_roof_cap)
-        lab_cost = (tile_area * labour_roof_tile) + (tot_steel_weight * labour_rebar)
-
-        add_takeoff_item({
-            "หมวด": "งานหลังคา",
-            "รายการ": roof_name,
-            "รายละเอียด": f"พื้นที่มุงเอียง {real_roof_area:.1f} ตร.ม. (ครอบ {ridge_len:.1f} ม.)",
-            "จำนวน": 1,
-            "คอนกรีต (ลบ.ม.)": 0.0,
-            "เหล็ก (กก.)": round(tot_steel_weight, 2),
-            "ไม้แบบ (ตร.ม.)": 0.0,
-            "ค่าวัสดุ (บาท)": round(mat_cost, 2),
-            "ค่าแรง (บาท)": round(lab_cost, 2)
-        })
-
-# =========================================================
-# TAB 9: 🧮 คำนวณ
-# =========================================================
-with tabs[8]:
-    st.subheader(f"🧮 สรุปปริมาณวัสดุแยกตามหมวด — [{active_proj_name}]")
-    items = current_proj.get("items", []) if current_proj else []
-    if items:
-        df = pd.DataFrame(items)
-        st.dataframe(df, use_container_width=True)
-        
-        c_del1, c_del2 = st.columns([2.5, 9.5])
-        if c_del1.button("🗑 ลบรายการทั้งหมดในโครงการนี้", type="secondary"):
-            p_idx = get_current_project_index()
-            if p_idx != -1:
-                st.session_state["projects"][p_idx]["items"] = []
-                st.rerun()
-    else:
-        st.info("ยังไม่มีรายการถอดแบบในโครงการนี้ กรุณากรอกข้อมูลใน Tab หมวดงานต่างๆ ด้านบน")
-
-# =========================================================
-# TAB 10: 📋 BOQ
-# =========================================================
-with tabs[9]:
-    st.subheader(f"📋 ตาราง BOQ (Bill of Quantities) — [{active_proj_name}]")
-    items = current_proj.get("items", []) if current_proj else []
-    if items:
-        df = pd.DataFrame(items)
-        df["รวมเป็นเงิน (บาท)"] = df["ค่าวัสดุ (บาท)"] + df["ค่าแรง (บาท)"]
-        
-        show_cols = ["หมวด", "รายการ", "รายละเอียด", "จำนวน", "ค่าวัสดุ (บาท)", "ค่าแรง (บาท)", "รวมเป็นเงิน (บาท)"]
-        
-        formatted_df = df[show_cols].copy()
-        st.dataframe(
-            formatted_df.style.format({
-                "ค่าวัสดุ (บาท)": "{:,.2f}",
-                "ค่าแรง (บาท)": "{:,.2f}",
-                "รวมเป็นเงิน (บาท)": "{:,.2f}"
-            }), 
-            use_container_width=True
-        )
-    else:
-        st.warning("ยังไม่มีรายการ BOQ ในโครงการนี้")
-
-# =========================================================
-# TAB 11: 📊 สรุป
-# =========================================================
-with tabs[10]:
-    st.subheader(f"📊 สรุปงบประมาณรวมทั้งโครงการ — [{active_proj_name}]")
-    items = current_proj.get("items", []) if current_proj else []
-    if items:
-        df = pd.DataFrame(items)
-        tot_mat = df["ค่าวัสดุ (บาท)"].sum()
-        tot_lab = df["ค่าแรง (บาท)"].sum()
-        grand_total = tot_mat + tot_lab
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("รวมค่าวัสดุทั้งหมด", f"฿{tot_mat:,.2f}")
-        m2.metric("รวมค่าแรงทั้งหมด", f"฿{tot_lab:,.2f}")
-        m3.metric("งบประมาณรวมทั้งสิ้น", f"฿{grand_total:,.2f}")
-    else:
-        st.info("กรุณาเพิ่มรายการถอดแบบเพื่อดูสรุปภาพรวมงบประมาณ")
+    st.subheader(f"
