@@ -49,14 +49,6 @@ st.markdown("""
         border-radius: 8px;
         font-weight: 500;
     }
-    
-    .rebar-card {
-        background-color: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 10px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -259,7 +251,7 @@ with tabs[0]:
                     st.markdown("---")
 
 # =========================================================
-# TAB 2: 🦶 ฐานราก (เพิ่ม งานดินขุดเผื่อ 30% + ดินถม)
+# TAB 2: 🦶 ฐานราก
 # =========================================================
 with tabs[1]:
     st.subheader(f"🦶 ถอดปริมาณงานฐานราก — [{active_proj_name}]")
@@ -275,7 +267,6 @@ with tabs[1]:
     f_h = m3.number_input("ความหนาฐานราก (เมตร)", value=0.35, step=0.05, key="f_h")
     f_depth = m4.number_input("ระดับความลึกดินขุด H (เมตร)", value=1.50, step=0.1, key="f_depth")
 
-    # เสาเข็ม
     if "เสาเข็ม" in f_type:
         st.markdown("#### 📌 รายละเอียดเสาเข็ม")
         pk1, pk2, pk3 = st.columns(3)
@@ -283,7 +274,6 @@ with tabs[1]:
         pile_len = pk2.number_input("ความยาวเสาเข็มต่อต้น (เมตร)", value=6.0, step=0.5, key="pile_len")
         piles_per_footing = pk3.number_input("จำนวนเสาเข็มต่อ 1 ฐานราก (ต้น)", min_value=1, value=1, key="piles_per_footing")
 
-    # เหล็กเสริมฐานราก Dynamic
     st.markdown("---")
     head_col, btn_col = st.columns([3, 1])
     head_col.markdown("#### 🥞 เหล็กเสริมฐานราก")
@@ -304,7 +294,6 @@ with tabs[1]:
         if c5.button("🗑", key=f"del_f_rebar_{idx}"):
             f_rebars_to_remove.append(idx)
 
-        # คำนวณความยาวรวม
         if r["mode"] == "จำนวน (เส้น)":
             total_len_row = r["val"] * r["len"]
         else:
@@ -319,23 +308,17 @@ with tabs[1]:
 
     st.markdown("---")
     if st.button("➕ บันทึกงานฐานราก", type="primary", key="btn_save_footing"):
-        # 1. ปริมาตรคอนกรีต & ไม้แบบ
         vol_concrete = (f_w * f_l * f_h * f_qty) * (1 + waste_concrete)
         formwork = (2 * (f_w + f_l) * f_h * f_qty) * (1 + waste_formwork)
         rebar_weight = tot_footing_rebar_weight * f_qty * (1 + waste_rebar)
 
-        # 2. ปริมาณงานดินขุด (เผื่อระยะทำงาน 30%)
         excavation_area_per_footing = (f_w * f_l) * 1.30
         vol_excavation = excavation_area_per_footing * f_depth * f_qty
-        
-        # 3. ปริมาณดินถมย้อนกลับ = ดินขุด - ปริมาตรคอนกรีตแทนที่
         vol_backfill = max(0.0, vol_excavation - (f_w * f_l * f_h * f_qty))
 
-        # ค่าแรง/วัสดุ ฐานราก
         mat_c = vol_concrete * p_concrete + rebar_weight * p_db12 + formwork * p_formwork
         lab_c = vol_concrete * labour_concrete + rebar_weight * labour_rebar + formwork * labour_formwork
 
-        # บันทึกหมวดงานดิน
         add_takeoff_item({
             "หมวด": "งานดินขุด-ดินถม",
             "รายการ": f"งานดินสำหรับฐานราก {f_name}",
@@ -348,7 +331,6 @@ with tabs[1]:
             "ค่าแรง (บาท)": round((vol_excavation * cost_excavation) + (vol_backfill * cost_backfill), 2)
         })
 
-        # บันทึกงานเสาเข็ม (ถ้ามี)
         detail_str = f"ขนาด {f_w:.2f}x{f_l:.2f}x{f_h:.2f} ม. (ลึก {f_depth:.2f}ม.)"
         if "เสาเข็ม" in f_type:
             total_piles = piles_per_footing * f_qty
@@ -368,7 +350,6 @@ with tabs[1]:
             })
             detail_str += f" | {pile_type} ({total_piles} ต้น)"
 
-        # บันทึกงานฐานราก คสล.
         add_takeoff_item({
             "หมวด": "งานฐานราก",
             "รายการ": f_name,
@@ -382,10 +363,10 @@ with tabs[1]:
         })
 
 # =========================================================
-# TAB 3: 🏛 เสา (เพิ่มตำแหน่งชั้น & เหล็ก Dynamic)
+# TAB 3: 🏛 เสา (แก้ไข Bug f-string key)
 # =========================================================
 with tabs[2]:
-    st.subheader(f"🏛️️ ถอดปริมาณงานเสา — [{active_proj_name}]")
+    st.subheader(f"🏛️ ถอดปริมาณงานเสา — [{active_proj_name}]")
     
     c1, c2, c3 = st.columns([1.5, 1.5, 1])
     col_name = c1.text_input("ชื่อ/สัญลักษณ์เสา", value="C1", key="col_name")
@@ -407,11 +388,21 @@ with tabs[2]:
     c_rebars_to_remove = []
     tot_col_rebar_weight = 0.0
 
+    col_pos_options = ["เหล็กแกน", "เหล็กปลอก", "เหล็กเสริมพิเศษ"]
+
     for idx, r in enumerate(st.session_state["column_rebars"]):
         c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1.2, 1.8, 1.5, 1.5, 0.5])
-        r["pos"] = c1.selectbox(f"ตำแหน่ง #{idx+1}", ["เหล็กแกน", "เหล็กปลอก", "เหล็กเสริมพิเศษ"], index=["เหล็กแกน", "เหล็กปลอก", "เหล็กเสริมพิเศษ"].index(r["pos"]), key="c_pos_{idx}")
-        r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 2, key=f"c_type_{idx}")
-        r["mode"] = c3.selectbox(f"โหมด #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r["mode"] == "จำนวน (เส้น)" else 1, key=f"c_mode_{idx}")
+        
+        # แก้ไขจุดเกิด Bug (เติม f ด้านหน้า string)
+        pos_idx = col_pos_options.index(r["pos"]) if r["pos"] in col_pos_options else 0
+        r["pos"] = c1.selectbox(f"ตำแหน่ง #{idx+1}", col_pos_options, index=pos_idx, key=f"c_pos_{idx}")
+        
+        type_idx = REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 2
+        r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=type_idx, key=f"c_type_{idx}")
+        
+        mode_idx = 0 if r["mode"] == "จำนวน (เส้น)" else 1
+        r["mode"] = c3.selectbox(f"โหมด #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=mode_idx, key=f"c_mode_{idx}")
+        
         r["val"] = c4.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"c_val_{idx}")
         r["len"] = c5.number_input(f"ยาว (ม.) #{idx+1}", value=float(r["len"]), key=f"c_len_{idx}")
         
@@ -452,7 +443,7 @@ with tabs[2]:
         })
 
 # =========================================================
-# TAB 4: ↔️ คาน (เพิ่มตำแหน่งชั้น & เหล็ก Dynamic)
+# TAB 4: ↔️ คาน
 # =========================================================
 with tabs[3]:
     st.subheader(f"↔️ ถอดปริมาณงานคาน — [{active_proj_name}]")
@@ -477,11 +468,20 @@ with tabs[3]:
     b_rebars_to_remove = []
     tot_beam_rebar_weight = 0.0
 
+    beam_pos_options = ["เหล็กบน", "เหล็กล่าง", "เหล็กเสริมพิเศษ", "เหล็กปลอก"]
+
     for idx, r in enumerate(st.session_state["beam_rebars"]):
         c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1.2, 1.8, 1.5, 1.5, 0.5])
-        r["pos"] = c1.selectbox(f"ตำแหน่ง #{idx+1}", ["เหล็กบน", "เหล็กล่าง", "เหล็กเสริมพิเศษ", "เหล็กปลอก"], index=["เหล็กบน", "เหล็กล่าง", "เหล็กเสริมพิเศษ", "เหล็กปลอก"].index(r["pos"]), key=f"b_pos_{idx}")
-        r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 2, key=f"b_type_{idx}")
-        r["mode"] = c3.selectbox(f"โหมด #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r["mode"] == "จำนวน (เส้น)" else 1, key=f"b_mode_{idx}")
+        
+        pos_idx = beam_pos_options.index(r["pos"]) if r["pos"] in beam_pos_options else 0
+        r["pos"] = c1.selectbox(f"ตำแหน่ง #{idx+1}", beam_pos_options, index=pos_idx, key=f"b_pos_{idx}")
+        
+        type_idx = REBAR_LIST.index(r["type"]) if r["type"] in REBAR_LIST else 2
+        r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=type_idx, key=f"b_type_{idx}")
+        
+        mode_idx = 0 if r["mode"] == "จำนวน (เส้น)" else 1
+        r["mode"] = c3.selectbox(f"โหมด #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=mode_idx, key=f"b_mode_{idx}")
+        
         r["val"] = c4.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"b_val_{idx}")
         r["len"] = c5.number_input(f"ยาว (ม.) #{idx+1}", value=float(r["len"]), key=f"b_len_{idx}")
         
