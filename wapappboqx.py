@@ -7,12 +7,13 @@ import io
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V6.2 (Bug Free)",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V6.4 (UI Fixed)",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# ปรับตกแต่ง CSS ให้ Banner สวยงาม ไม่ดูขาด และรองรับทุกความกว้างจอ
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap');
@@ -24,25 +25,40 @@ st.markdown("""
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 2rem !important;
-        max-width: 95% !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
+        max-width: 100% !important;
     }
 
     .header-banner {
-        background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+        background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #3b82f6 100%);
         color: white;
-        padding: 18px 24px;
-        border-radius: 12px;
-        margin-bottom: 20px;
+        padding: 22px 28px;
+        border-radius: 16px;
+        margin-bottom: 24px;
+        box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.3), 0 8px 10px -6px rgba(37, 99, 235, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        width: 100%;
+        box-sizing: border-box;
     }
     .header-title {
-        font-size: 1.5rem;
+        font-size: 1.65rem;
         font-weight: 700;
         margin: 0;
+        letter-spacing: -0.5px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
     }
     .header-subtitle {
-        font-size: 0.95rem;
-        opacity: 0.9;
-        margin-top: 4px;
+        font-size: 1.0rem;
+        opacity: 0.92;
+        margin-top: 6px;
+        font-weight: 400;
+        background: rgba(255, 255, 255, 0.12);
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 8px;
     }
 
     .stButton>button {
@@ -139,9 +155,9 @@ with st.sidebar:
         labour_plastering = st.number_input("ค่าแรงฉาบปูน (บาท/ตร.ม.)", value=85.0, step=5.0)
         labour_painting = st.number_input("ค่าแรงทาสี (บาท/ตร.ม.)", value=45.0, step=5.0)
 
-        st.markdown("**งานพื้น & ฝ้าเพดาน**")
-        p_tile_mat = st.number_input("กระเบื้องแกรนิตโต้ (บาท/ตร.ม.)", value=350.0, step=20.0)
-        labour_tile = st.number_input("ค่าแรงปูกระเบื้อง (บาท/ตร.ม.)", value=180.0, step=10.0)
+        st.markdown("**งานพื้น & ฝ้าเพดาน (ราคาเฉลี่ยมาตรฐาน)**")
+        p_tile_mat = st.number_input("กระเบื้องแกรนิตโต้/พื้น (บาท/ตร.ม.)", value=350.0, step=20.0)
+        labour_tile = st.number_input("ค่าแรงปูกระเบื้อง/พื้น (บาท/ตร.ม.)", value=180.0, step=10.0)
         p_ceiling_mat = st.number_input("ฝ้ายิปซัมฉาบเรียบ+โครง (บาท/ตร.ม.)", value=220.0, step=10.0)
         labour_ceiling = st.number_input("ค่าแรงติดตั้งฝ้า (บาท/ตร.ม.)", value=100.0, step=10.0)
 
@@ -188,8 +204,28 @@ pile_price_map = {
     "เสาเข็มเจาะ Ø 0.35 ม.": (p_pile_bored35, labour_pile_bored)
 }
 
+# 🗺️ แมปราคาและค่าแรงตามชนิดวัสดุปูพื้น
+floor_price_map = {
+    "กระเบื้องแกรนิตโต้ 60x60 ซม. + ปูนทรายปรับระดับ": (p_tile_mat, labour_tile),
+    "กระเบื้องเซรามิก 30x30 ซม. / 40x40 ซม. (งานห้องน้ำ/ซักล้าง)": (220.0, 160.0),
+    "ไม้ลามิเนต 8 มม. / 12 มม. + ปูนทรายปรับระดับ": (390.0, 120.0),
+    "กระเบื้องยาง SPC 4 มม. / 5 มม. (แบบ Click Lock)": (420.0, 100.0),
+    "พื้นไม้ปาร์เก้ / ไม้จริง + ขัดเงาทำสี": (950.0, 350.0),
+    "พื้นคอนกรีตขัดมัน (Polished Concrete) / พื้นอีพ็อกซี่ (Epoxy)": (280.0, 150.0)
+}
+
+# 🗺️️ แมปราคาและค่าแรงตามชนิดฝ้าเพดาน
+ceiling_price_map = {
+    "ฝ้ายิปซัมบอร์ด 9 มม. ฉาบเรียบ + โครงคร่าว C-Line": (p_ceiling_mat, labour_ceiling),
+    "ฝ้ายิปซัมบอร์ด ทนชื้น 9 มม. (ห้องน้ำ/ชายคา)": (260.0, 110.0),
+    "ฝ้าเพดานสำเร็จรูป ทีบาร์ 60x60 ซม. (โครงคร่าวอลูมิเนียม)": (210.0, 90.0),
+    "ฝ้าเพดานหลุม / ฝ้าซ่อนไฟ (คิดเพิ่มเฉพาะส่วนหลุม)": (350.0, 180.0),
+    "ฝ้าไม้ระแนง / ฝ้า WPC ทนแดดทนฝน": (550.0, 220.0),
+    "ฝ้าสมาร์ทบอร์ด / ไม้ฝาสำเร็จรูป (ระบายอากาศ)": (290.0, 130.0)
+}
+
 # ---------------------------------------------------------
-# 5. Header Banner
+# 5. Header Banner (ปรับดีไซน์ใหม่ให้พรีเมียม เต็มแนวนอน)
 # ---------------------------------------------------------
 st.markdown(f"""
 <div class="header-banner">
@@ -204,7 +240,7 @@ st.markdown(f"""
 tabs = st.tabs([
     "📁 โครงการ", 
     "🦶 ฐานราก", 
-    "🏛️️ เสา", 
+    "🏛️ เสา", 
     "↔ คาน", 
     "🧱 พื้น", 
     "🧱 ผนัง & ตกแต่ง",
@@ -719,32 +755,34 @@ with tabs[5]:
                 "ค่าแรง (บาท)": round(cost_per_set_lab * dw_qty, 2)
             })
 
-    with st.expander("✨ 3. งานปูพื้นและตกแต่งผิว", expanded=False):
+    with st.expander("✨ 3. งานปูพื้นและตกแต่งผิว (ระบุ กว้าง x ยาว)", expanded=False):
         fl1, fl2 = st.columns([2, 1])
         floor_name = fl1.text_input("ชื่อ/สัญลักษณ์หมวดงานปูพื้น", value="F-01 (กระเบื้องแกรนิตโต้)", key="floor_name")
         floor_qty = fl2.number_input("จำนวนห้อง/พื้นที่ (ชุด)", min_value=1, value=1, key="floor_qty")
 
-        fl_c1, fl_c2 = st.columns(2)
-        floor_area_input = fl_c1.number_input("พื้นที่ปูรวม (ตร.ม.)", value=35.0, step=1.0, key="floor_area_input")
-        floor_material_type = fl_c2.selectbox("ประเภทวัสดุปูพื้น", [
-            "กระเบื้องแกรนิตโต้ 60x60 ซม. + ปูนทรายปรับระดับ",
-            "ไม้ลามิเนต 8 มม. + ปูนทรายปรับระดับ",
-            "กระเบื้องยาง SPC 4 มม. + ปูนทรายปรับระดับ"
-        ], key="floor_material_type")
+        fl_dim1, fl_dim2, fl_type_col = st.columns([1, 1, 2])
+        floor_w = fl_dim1.number_input("ความกว้าง (เมตร)", value=5.00, step=0.10, key="floor_w")
+        floor_l = fl_dim2.number_input("ความยาว (เมตร)", value=7.00, step=0.10, key="floor_l")
+        
+        floor_material_type = fl_type_col.selectbox("ประเภทวัสดุปูพื้น", list(floor_price_map.keys()), key="floor_material_type")
 
         if st.button("➕ บันทึกงานปูพื้น", type="primary", key="btn_save_floor"):
-            net_area = (floor_area_input * floor_qty) * (1 + waste_finishing)
+            area_calculated = (floor_w * floor_l * floor_qty)
+            net_area = area_calculated * (1 + waste_finishing)
+            
+            p_mat, p_lab = floor_price_map.get(floor_material_type, (p_tile_mat, labour_tile))
+            
             add_takeoff_item({
                 "หมวด": "งานปูพื้นและตกแต่งผิว",
                 "รายการ": floor_name,
-                "รายละเอียด": f"{floor_material_type} พื้นที่รวม {net_area:.1f} ตร.ม.",
+                "รายละเอียด": f"{floor_material_type} ขนาด {floor_w:.2f}x{floor_l:.2f}ม. ({floor_qty} ชุด) | พื้นที่รวม {net_area:.1f} ตร.ม.",
                 "จำนวน": floor_qty,
                 "คอนกรีต (ลบ.ม.)": 0.0,
                 "เหล็ก (กก.)": 0.0,
                 "ไม้แบบ (ตร.ม.)": 0.0,
                 "พื้นที่ปูพื้น (ตร.ม.)": round(net_area, 2),
-                "ค่าวัสดุ (บาท)": round(net_area * p_tile_mat, 2),
-                "ค่าแรง (บาท)": round(net_area * labour_tile, 2)
+                "ค่าวัสดุ (บาท)": round(net_area * p_mat, 2),
+                "ค่าแรง (บาท)": round(net_area * p_lab, 2)
             })
 
 # =========================================================
@@ -757,27 +795,29 @@ with tabs[6]:
     ceiling_name = cl1.text_input("ชื่อ/สัญลักษณ์ฝ้าเพดาน", value="C-01 (ฝ้าฉาบเรียบ)", key="ceiling_name")
     ceiling_qty = cl2.number_input("จำนวนผืนฝ้า", min_value=1, value=1, key="ceiling_qty")
 
-    cl_c1, cl_c2 = st.columns(2)
-    ceiling_area_input = cl_c1.number_input("พื้นที่ฝ้ารวม (ตร.ม.)", value=40.0, step=1.0, key="ceiling_area_input")
-    ceiling_type = cl_c2.selectbox("ประเภทฝ้าเพดาน", [
-        "ฝ้ายิปซัมบอร์ด 9 มม. ฉาบเรียบ + โครงคร่าว C-Line",
-        "ฝ้ายิปซัมบอร์ด ทนชื้น (ห้องน้ำ/ชายคา)",
-        "ฝ้าเพดานสำเร็จรูป ทีบาร์ 60x60 ซม."
-    ], key="ceiling_type")
+    cl_dim1, cl_dim2, cl_type_col = st.columns([1, 1, 2])
+    ceiling_w = cl_dim1.number_input("ความกว้างฝ้า (เมตร)", value=5.00, step=0.10, key="ceiling_w")
+    ceiling_l = cl_dim2.number_input("ความยาวฝ้า (เมตร)", value=8.00, step=0.10, key="ceiling_l")
+    
+    ceiling_type = cl_type_col.selectbox("ประเภทฝ้าเพดาน", list(ceiling_price_map.keys()), key="ceiling_type")
 
     if st.button("➕ บันทึกงานฝ้าเพดาน", type="primary", key="btn_save_ceiling"):
-        net_area = (ceiling_area_input * ceiling_qty) * (1 + waste_finishing)
+        area_calculated = (ceiling_w * ceiling_l * ceiling_qty)
+        net_area = area_calculated * (1 + waste_finishing)
+        
+        c_mat, c_lab = ceiling_price_map.get(ceiling_type, (p_ceiling_mat, labour_ceiling))
+        
         add_takeoff_item({
             "หมวด": "งานฝ้าเพดาน",
             "รายการ": ceiling_name,
-            "รายละเอียด": f"{ceiling_type} พื้นที่รวม {net_area:.1f} ตร.ม.",
+            "รายละเอียด": f"{ceiling_type} ขนาด {ceiling_w:.2f}x{ceiling_l:.2f}ม. ({ceiling_qty} ผืน) | พื้นที่รวม {net_area:.1f} ตร.ม.",
             "จำนวน": ceiling_qty,
             "คอนกรีต (ลบ.ม.)": 0.0,
             "เหล็ก (กก.)": 0.0,
             "ไม้แบบ (ตร.ม.)": 0.0,
             "พื้นที่ฝ้า (ตร.ม.)": round(net_area, 2),
-            "ค่าวัสดุ (บาท)": round(net_area * p_ceiling_mat, 2),
-            "ค่าแรง (บาท)": round(net_area * labour_ceiling, 2)
+            "ค่าวัสดุ (บาท)": round(net_area * c_mat, 2),
+            "ค่าแรง (บาท)": round(net_area * c_lab, 2)
         })
 
 # =========================================================
@@ -874,11 +914,13 @@ with tabs[8]:
         "หลังคาทรงจั่ว / หมาแหงน (เมทัลชีท)"
     ])
 
-    rc1, rc2, rc3 = st.columns(3)
-    plan_area = rc1.number_input("พื้นที่ราบรวมจากผัง Roof Plan (ตร.ม.)", value=120.0, step=5.0, key="plan_area")
-    roof_pitch = rc2.number_input("ความชันหลังคา (องศา °)", min_value=0.0, max_value=85.0, value=30.0, step=1.0, key="roof_pitch")
-    ridge_len = rc3.number_input("ความยาวครอบสันหลังคา/ตะเข้สันรวม (เมตร)", value=25.0, step=1.0, key="ridge_len")
+    rc1, rc2, rc3, rc4 = st.columns(4)
+    roof_plan_w = rc1.number_input("ความกว้างผังหลังคา (เมตร)", value=10.0, step=0.5, key="roof_plan_w")
+    roof_plan_l = rc2.number_input("ความยาวผังหลังคา (เมตร)", value=12.0, step=0.5, key="roof_plan_l")
+    roof_pitch = rc3.number_input("ความชันหลังคา (องศา °)", min_value=0.0, max_value=85.0, value=30.0, step=1.0, key="roof_pitch")
+    ridge_len = rc4.number_input("ความยาวครอบสัน/ตะเข้สันรวม (เมตร)", value=25.0, step=1.0, key="ridge_len")
 
+    plan_area = roof_plan_w * roof_plan_l
     rad = math.radians(roof_pitch)
     cos_val = math.cos(rad)
     slope_factor = 1.0 / cos_val if cos_val > 0.001 else 1.0
@@ -895,7 +937,7 @@ with tabs[8]:
         add_takeoff_item({
             "หมวด": "งานหลังคา",
             "รายการ": roof_name,
-            "รายละเอียด": f"พื้นที่มุงเอียง {real_roof_area:.1f} ตร.ม. (ครอบ {ridge_len:.1f} ม.)",
+            "รายละเอียด": f"ผัง {roof_plan_w:.1f}x{roof_plan_l:.1f}ม. (ราบ {plan_area:.1f} ตร.ม.) | มุงเอียง {real_roof_area:.1f} ตร.ม. (ครอบ {ridge_len:.1f} ม.)",
             "จำนวน": 1,
             "คอนกรีต (ลบ.ม.)": 0.0,
             "เหล็ก (กก.)": round(tot_steel_weight, 2),
@@ -906,7 +948,7 @@ with tabs[8]:
         })
 
 # =========================================================
-# TAB 10: 🧮 คำนวณ (แก้ไขปัญหา KeyError & ZeroDivision)
+# TAB 10: 🧮 คำนวณ
 # =========================================================
 with tabs[9]:
     st.subheader(f"🧮 สรุปปริมาณวัสดุก่อสร้างรวมละเอียดยิบ — [{active_proj_name}]")
@@ -923,7 +965,6 @@ with tabs[9]:
         tot_floor_area = sum(item.get("พื้นที่ปูพื้น (ตร.ม.)", 0.0) for item in items)
         tot_ceiling_area = sum(item.get("พื้นที่ฝ้า (ตร.ม.)", 0.0) for item in items)
 
-        # แก้ไขปัญหา KeyError: ป้องกันการดึง Key เหล็กเสริมผิดพลาด
         rebar_by_type = {size: 0.0 for size in REBAR_LIST}
         for item in items:
             breakdown = item.get("เหล็กแยกชนิด", {})
@@ -990,7 +1031,7 @@ with tabs[9]:
         st.info("ยังไม่มีรายการถอดแบบในโครงการนี้ กรุณากรอกข้อมูลใน Tab หมวดงานต่างๆ ด้านบน")
 
 # =========================================================
-# TAB 11: 📋 BOQ (เปิดใช้งาน Safe Export Excel)
+# TAB 11: 📋 BOQ
 # =========================================================
 with tabs[10]:
     st.subheader(f"📋 ตาราง BOQ (Bill of Quantities) — [{active_proj_name}]")
@@ -1031,7 +1072,6 @@ with tabs[10]:
         
         st.subheader(f"💵 สรุปยอดสุทธิทั้งสิ้น (Grand Total): ฿{grand_total_boq:,.2f}")
 
-        # Safe Export Excel พร้อม Try-Except ป้องกันไลบรารีขาด
         try:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
