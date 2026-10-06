@@ -8,13 +8,12 @@ import json
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V6.5 (Upgraded)",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V6.6 (Upgraded)",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ปรับตกแต่ง CSS ให้ Banner สวยงาม ไม่ดูขาด และรองรับทุกความกว้างจอ
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap');
@@ -24,7 +23,7 @@ st.markdown("""
     }
     
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 1.5rem !important;
         padding-bottom: 2rem !important;
         padding-left: 2rem !important;
         padding-right: 2rem !important;
@@ -34,43 +33,42 @@ st.markdown("""
     .header-banner {
         background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #3b82f6 100%);
         color: white;
-        padding: 22px 28px;
-        border-radius: 16px;
-        margin-bottom: 24px;
-        box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.3), 0 8px 10px -6px rgba(37, 99, 235, 0.2);
+        padding: 20px 24px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 15px rgba(37, 99, 235, 0.2);
         border: 1px solid rgba(255, 255, 255, 0.15);
         width: 100%;
         box-sizing: border-box;
     }
     .header-title {
-        font-size: 1.65rem;
+        font-size: 1.5rem;
         font-weight: 700;
         margin: 0;
-        letter-spacing: -0.5px;
         display: flex;
         align-items: center;
         gap: 10px;
     }
     .header-subtitle {
-        font-size: 1.0rem;
-        opacity: 0.92;
+        font-size: 0.95rem;
+        opacity: 0.95;
         margin-top: 6px;
         font-weight: 400;
-        background: rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.15);
         display: inline-block;
-        padding: 4px 12px;
-        border-radius: 8px;
+        padding: 3px 10px;
+        border-radius: 6px;
     }
 
     .stButton>button {
-        border-radius: 8px;
+        border-radius: 6px;
         font-weight: 500;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. Standard Rebar Weight Dictionary (kg/m) - [Upgraded V6.5]
+# 2. Standard Dictionaries & Data Mappings
 # ---------------------------------------------------------
 REBAR_WEIGHT = {
     "RB6": 0.222,
@@ -79,10 +77,48 @@ REBAR_WEIGHT = {
     "DB16": 1.580,
     "DB20": 2.470,
     "DB25": 3.850,
-    "DB28": 4.830,  # อัปเกรดเพิ่มเหล็ก DB28
-    "DB32": 6.310   # อัปเกรดเพิ่มเหล็ก DB32
+    "DB28": 4.830,
+    "DB32": 6.310
 }
 REBAR_LIST = list(REBAR_WEIGHT.keys())
+
+# รายการทรงหลังคา และ Slope Factor ประเมิน
+ROOF_SHAPE_FACTORS = {
+    "หลังคาเพิงหมางื่น (Lean-to)": 1.05,
+    "หลังคาจั่ว (Gable)": 1.12,
+    "หลังคาปั้นหยา (Hip)": 1.18,
+    "หลังคาปั้นหยาผสมจั่ว (Manson/Dutch)": 1.20,
+    "หลังคาหมางื่นซ้อนชั้น (Modern Lean-to)": 1.08,
+    "หลังคาดาดฟ้า/สแลป (Flat Slab/Concrete)": 1.00
+}
+
+# รายการวัสดุมุงหลังคา (ราคาวัสดุ/ตร.ม. ประเมิน, ค่าแรง/ตร.ม. ประเมิน, น้ำหนักโครงเหล็ก กก./ตร.ม.)
+ROOF_MATERIAL_SPECS = {
+    "เมทัลชีท หนา 0.35 - 0.47 mm (พร้อมบุ PE / PU Foam)": {"mat": 280.0, "lab": 120.0, "steel_factor": 18.0},
+    "กระเบื้องลอนคู่ (ซีเมนต์ใยหิน / ไร้ใยหิน)": {"mat": 180.0, "lab": 100.0, "steel_factor": 20.0},
+    "กระเบื้องคอนกรีตซีแพคโมเนีย (CPAC Monier)": {"mat": 320.0, "lab": 150.0, "steel_factor": 28.0},
+    "กระเบื้องแผ่นเรียบเพรสทีจ (Prestige / Neoclassic)": {"mat": 450.0, "lab": 180.0, "steel_factor": 28.0},
+    "กระเบื้องดินเผา / กระเบื้องสุโขทัย": {"mat": 550.0, "lab": 220.0, "steel_factor": 25.0},
+    "กระเบื้องเซรามิก (Excella)": {"mat": 750.0, "lab": 250.0, "steel_factor": 28.0},
+    "แผ่นหลังคาไวนิล (UPVC / Plastwood)": {"mat": 650.0, "lab": 150.0, "steel_factor": 18.0},
+    "แผ่นโพลีคาร์บอเนต / ตราเพชร / แผ่นโปร่งแสง": {"mat": 400.0, "lab": 120.0, "steel_factor": 16.0},
+    "หลังคาชิงเกิ้ลรูฟ (Shingle Roof / Asphalt Shingle)": {"mat": 580.0, "lab": 200.0, "steel_factor": 22.0},
+    "หลังคาโซลาร์เซลล์ integrated (Solar Roof Tiles)": {"mat": 2500.0, "lab": 350.0, "steel_factor": 25.0}
+}
+
+# รายการประตู-หน้าต่างแบบละเอียด
+DOOR_WINDOW_TYPES = [
+    "ประตูไม้เนื้อแข็ง / กระจก พร้อมวงกบ & ฟิตติ้ง",
+    "ประตูไม้สังเคราะห์ (UPVC / PVC)",
+    "ประตูบานสไลด์อลูมิเนียม (อบขาว / ดำ / ชา / ลายไม้) พร้อมกระจก",
+    "ประตูบานผลัก/บานสวิง อลูมิเนียม",
+    "ประตูบานม้วนเหล็ก / ประตูบานพับอลูมิเนียมลายไม้",
+    "หน้าต่างบานเลื่อนอลูมิเนียม พร้อมกระจก",
+    "หน้าต่างบานกระทุ้ง / บานเปิดอลูมิเนียม",
+    "หน้าต่างบานเกล็ด (พร้อมเกล็ดกระจก/อลูมิเนียม)",
+    "หน้าต่างกระจกติดตาย (Fixed Window)",
+    "ประตู-หน้าต่าง กระจกบานเปลือย (Frameless Glass)"
+]
 
 # ---------------------------------------------------------
 # 3. Session State Management
@@ -135,7 +171,7 @@ def add_takeoff_item(item_data):
         st.session_state["projects"][p_idx]["items"].append(item_data)
         st.success(f"บันทึกรายการ '{item_data['รายการ']}' เรียบร้อยแล้ว!")
     else:
-        st.error("⚠️ กรุณาสร้างหรือเลือกโครงการก่อนทำการบันทึกข้อมูล!")
+        st.error("⚠️️ กรุณาสร้างหรือเลือกโครงการก่อนทำการบันทึกข้อมูล!")
 
 # ---------------------------------------------------------
 # 4. Sidebar Price & Material Settings
@@ -158,7 +194,7 @@ with st.sidebar:
         labour_plastering = st.number_input("ค่าแรงฉาบปูน (บาท/ตร.ม.)", value=85.0, step=5.0)
         labour_painting = st.number_input("ค่าแรงทาสี (บาท/ตร.ม.)", value=45.0, step=5.0)
 
-        st.markdown("**งานพื้น & ฝ้าเพดาน (ราคาเฉลี่ยมาตรฐาน)**")
+        st.markdown("**งานพื้น & ฝ้าเพดาน**")
         p_tile_mat = st.number_input("กระเบื้องแกรนิตโต้/พื้น (บาท/ตร.ม.)", value=350.0, step=20.0)
         labour_tile = st.number_input("ค่าแรงปูกระเบื้อง/พื้น (บาท/ตร.ม.)", value=180.0, step=10.0)
         p_ceiling_mat = st.number_input("ฝ้ายิปซัมฉาบเรียบ+โครง (บาท/ตร.ม.)", value=220.0, step=10.0)
@@ -173,7 +209,6 @@ with st.sidebar:
         p_db12 = st.number_input("เหล็ก DB12/DB16/DB20/DB25/DB28/DB32 (บาท/กก.)", value=31.0, step=0.5)
         p_rb9 = st.number_input("เหล็ก RB6/RB9/โครงสร้าง (บาท/กก.)", value=33.0, step=0.5)
         p_formwork = st.number_input("ไม้แบบ (บาท/ตร.ม.)", value=380.0, step=10.0)
-        p_roof_tile = st.number_input("กระเบื้องหลังคา/เมทัลชีท (บาท/ตร.ม.)", value=280.0, step=10.0)
         p_roof_cap = st.number_input("ครอบสันหลังคา/ตะเข้สัน (บาท/เมตร)", value=180.0, step=10.0)
 
     with st.expander("📌 ราคาและค่าแรงเสาเข็ม", expanded=False):
@@ -189,7 +224,6 @@ with st.sidebar:
         labour_concrete = st.number_input("ค่าแรงเทคอนกรีต (บาท/ลบ.ม.)", value=350.0, step=10.0)
         labour_rebar = st.number_input("ค่าแรงผูกเหล็ก/โครงเหล็ก (บาท/กก.)", value=8.5, step=0.5)
         labour_formwork = st.number_input("ค่าแรงประกอบไม้แบบ (บาท/ตร.ม.)", value=150.0, step=10.0)
-        labour_roof_tile = st.number_input("ค่าแรงมุงหลังคา (บาท/ตร.ม.)", value=120.0, step=10.0)
 
     with st.expander("📉 เปอร์เซ็นต์สูญเสีย (% Wastage)", expanded=False):
         waste_concrete = st.number_input("เผื่อคอนกรีต (%)", value=5.0) / 100.0
@@ -230,7 +264,7 @@ ceiling_price_map = {
 # ---------------------------------------------------------
 st.markdown(f"""
 <div class="header-banner">
-    <div class="header-title">⚙️ ระบบถอดปริมาณงานโครงสร้าง & สถาปัตย์ (Takeoff V6.5)</div>
+    <div class="header-title">⚙️ ระบบถอดปริมาณงานโครงสร้าง & สถาปัตย์ (Takeoff V6.6)</div>
     <div class="header-subtitle">📁 โครงการปัจจุบัน: <b>{active_proj_name}</b></div>
 </div>
 """, unsafe_allow_html=True)
@@ -241,11 +275,11 @@ st.markdown(f"""
 tabs = st.tabs([
     "📁 โครงการ", 
     "🦶 ฐานราก", 
-    "🏛️ เสา", 
+    "🏛 เสา", 
     "↔ คาน", 
     "🧱 พื้น", 
     "🧱 ผนัง & ตกแต่ง",
-    "☁️️ ฝ้าเพดาน",
+    "☁ ฝ้าเพดาน",
     "🪜 บันได", 
     "⛺ หลังคา", 
     "🧮 คำนวณ", 
@@ -254,7 +288,7 @@ tabs = st.tabs([
 ])
 
 # =========================================================
-# TAB 1: 📁 โครงการ - [Upgraded V6.5 Backup & Restore]
+# TAB 1: 📁 โครงการ
 # =========================================================
 with tabs[0]:
     col_create, col_list = st.columns([0.4, 0.6])
@@ -303,7 +337,7 @@ with tabs[0]:
                     st.session_state["current_project_id"] = data[0]["id"]
                 st.success("นำเข้าข้อมูลเรียบร้อยแล้ว!")
                 st.rerun()
-            except Exception as e:
+            except Exception:
                 st.error("ไฟล์ JSON ไม่ถูกต้อง")
 
     with col_list:
@@ -456,7 +490,7 @@ with tabs[1]:
         })
 
 # =========================================================
-# TAB 3: 🏛 เสา - [Upgraded V6.5 Calculation Logic]
+# TAB 3: 🏛 เสา
 # =========================================================
 with tabs[2]:
     st.subheader(f"🏛️ ถอดปริมาณงานเสา — [{active_proj_name}]")
@@ -475,9 +509,8 @@ with tabs[2]:
     head_c, btn_c = st.columns([3, 1])
     head_c.markdown("#### 🥞 เหล็กเสริมเสา")
     
-    # คำนวณความยาวปลอกเสาอัตโนมัติ: 2*(กว้าง+ยาว) + เผื่อระยะงอ 0.15ม.
     default_stirrup_len = round(2 * (col_w + col_l) + 0.15, 2)
-    default_main_len = round(col_h + 0.60, 2) # ทาบเหล็ก 60 ซม.
+    default_main_len = round(col_h + 0.60, 2)
 
     if btn_c.button("➕ เพิ่มเหล็กเสา", key="btn_add_col_rebar"):
         st.session_state["column_rebars"].append({"pos": "เหล็กแกน", "type": "DB12", "mode": "จำนวน (เส้น)", "val": 4.0, "len": default_main_len})
@@ -502,7 +535,6 @@ with tabs[2]:
         
         r["val"] = c4.number_input(f"ค่า #{idx+1}", value=float(r["val"]), key=f"c_val_{idx}")
         
-        # ปรับอัตโนมัติถ้าความยาวเดิมสั้นเกินไปสำหรับปลอก
         if r["pos"] == "เหล็กปลอก" and r["len"] < 0.2:
             r["len"] = default_stirrup_len
 
@@ -550,7 +582,7 @@ with tabs[2]:
         })
 
 # =========================================================
-# TAB 4: ↔ คาน - [Upgraded V6.5 Beam Calculations]
+# TAB 4: ↔ คาน
 # =========================================================
 with tabs[3]:
     st.subheader(f"↔️ ถอดปริมาณงานคาน — [{active_proj_name}]")
@@ -569,9 +601,8 @@ with tabs[3]:
     head_b, btn_b = st.columns([3, 1])
     head_b.markdown("#### 🥞 เหล็กเสริมคาน")
     
-    # คำนวณความยาวเหล็กปลอกอัตโนมัติ: 2*(ความกว้าง+ความสูง) + ระยะงอ Hook 0.15 ม.
     default_beam_stirrup_len = round(2 * (beam_w + beam_h) + 0.15, 2)
-    default_beam_main_len = round(beam_l + 0.60, 2) # ระยะงอตะขอปลาย + ระยะทาบ
+    default_beam_main_len = round(beam_l + 0.60, 2)
 
     if btn_b.button("➕ เพิ่มเหล็กคาน", key="btn_add_beam_rebar"):
         st.session_state["beam_rebars"].append({"pos": "เหล็กบน", "type": "DB12", "mode": "จำนวน (เส้น)", "val": 2.0, "len": default_beam_main_len})
@@ -691,7 +722,7 @@ with tabs[4]:
         })
 
 # =========================================================
-# TAB 6: 🧱 ผนัง & ตกแต่ง
+# TAB 6: 🧱 ผนัง & ตกแต่ง (UPDATED)
 # =========================================================
 with tabs[5]:
     st.subheader(f"🧱 ถอดปริมาณงานผนัง ประตู-หน้าต่าง และพื้นผิวตกแต่ง — [{active_proj_name}]")
@@ -771,15 +802,10 @@ with tabs[5]:
                 "ค่าแรง (บาท)": round(total_wall_lab, 2)
             })
 
-    with st.expander("🚪 2. งานประตู - หน้าต่าง (บาน/วงกบ/อุปกรณ์)", expanded=False):
-        dw1, dw2, dw3 = st.columns([1.5, 1.5, 1])
+    with st.expander("🚪 2. งานประตู - หน้าต่าง (บาน/วงกบ/อุปกรณ์)", expanded=True):
+        dw1, dw2, dw3 = st.columns([1.5, 2.5, 1])
         dw_name = dw1.text_input("ชื่อ/สัญลักษณ์ประตู-หน้าต่าง", value="D1", key="dw_name")
-        dw_type = dw2.selectbox("ประเภทชุดประตู-หน้าต่าง", [
-            "ประตูไม้เนื้อแข็ง / กระจก พร้อมวงกบ & ฟิตติ้ง",
-            "ประตูบานเลื่อนอลูมิเนียม พร้อมกระจก & วงกบ",
-            "หน้าต่างบานเลื่อนอลูมิเนียม พร้อมกระจก & มุ้งลวด",
-            "หน้าต่างบานกระทุ้งอลูมิเนียม"
-        ], key="dw_type")
+        dw_type = dw2.selectbox("ประเภทชุดประตู-หน้าต่าง", DOOR_WINDOW_TYPES, key="dw_type")
         dw_qty = dw3.number_input("จำนวน (ชุด)", min_value=1, value=1, key="dw_qty")
 
         dw_c1, dw_c2 = st.columns(2)
@@ -945,18 +971,19 @@ with tabs[7]:
         })
 
 # =========================================================
-# TAB 9: ⛺ หลังคา
+# TAB 9: ⛺ หลังคา (UPDATED)
 # =========================================================
 with tabs[8]:
-    st.subheader(f"⛺ ถอดปริมาณงานหลังคา (รองรับปั้นหยา/หลายจั่ว) — [{active_proj_name}]")
+    st.subheader(f"⛺ ถอดปริมาณงานหลังคา (แยกทรงหลังคา & วัสดุมุง) — [{active_proj_name}]")
     
-    r1, r2 = st.columns(2)
+    r1, r2, r3 = st.columns([1, 1.5, 1.5])
     roof_name = r1.text_input("ชื่อ/สัญลักษณ์หลังคา", value="R1", key="roof_name")
-    roof_type = r2.selectbox("ประเภททรงหลังคา & วัสดุมุง", [
-        "หลังคาทรงปั้นหยา / หลายจั่ว (กระเบื้องซีแพค/เพรสทีจ)",
-        "หลังคาทรงจั่ว / หมาแหงน (กระเบื้องลอนคู่)",
-        "หลังคาทรงจั่ว / หมาแหงน (เมทัลชีท)"
-    ])
+    
+    # 1. ประเภททรงหลังคา (Roof Form Factor)
+    roof_shape = r2.selectbox("ประเภททรงหลังคา (Roof Form Factor)", list(ROOF_SHAPE_FACTORS.keys()), key="roof_shape")
+    
+    # 2. ประเภทวัสดุมุงหลังคา (Roof Material Type)
+    roof_material = r3.selectbox("ประเภทวัสดุมุง (Roof Material Type)", list(ROOF_MATERIAL_SPECS.keys()), key="roof_material")
 
     rc1, rc2, rc3, rc4 = st.columns(4)
     roof_plan_w = rc1.number_input("ความกว้างผังหลังคา (เมตร)", value=10.0, step=0.5, key="roof_plan_w")
@@ -964,24 +991,35 @@ with tabs[8]:
     roof_pitch = rc3.number_input("ความชันหลังคา (องศา °)", min_value=0.0, max_value=85.0, value=30.0, step=1.0, key="roof_pitch")
     ridge_len = rc4.number_input("ความยาวครอบสัน/ตะเข้สันรวม (เมตร)", value=25.0, step=1.0, key="ridge_len")
 
+    # คำนวณ Factor Slope + Form Factor
+    shape_factor = ROOF_SHAPE_FACTORS.get(roof_shape, 1.10)
+    mat_spec = ROOF_MATERIAL_SPECS.get(roof_material, {"mat": 300.0, "lab": 120.0, "steel_factor": 20.0})
+
     plan_area = roof_plan_w * roof_plan_l
     rad = math.radians(roof_pitch)
     cos_val = math.cos(rad)
-    slope_factor = 1.0 / cos_val if cos_val > 0.001 else 1.0
-    real_roof_area = plan_area * slope_factor
+    pitch_slope_factor = 1.0 / cos_val if cos_val > 0.001 else 1.0
+    
+    # พื้นที่มุงจริง คำนวณจาก (พื้นที่ราบ * Factor ความชัน * Factor ทรงหลังคา)
+    real_roof_area = plan_area * pitch_slope_factor * shape_factor
+
+    st.info(f"💡 **ประเมินพื้นที่มุงจริง**: {real_roof_area:.2f} ตร.ม. (พื้นที่ราบ {plan_area:.1f} ตร.ม. × Factor มุมเอียง {pitch_slope_factor:.3f} × Factor ทรงหลังคา {shape_factor:.2f})")
 
     if st.button("➕ บันทึกงานหลังคา", type="primary", key="btn_save_roof"):
         tile_area = real_roof_area * (1 + waste_roof)
-        steel_factor = 18.0 if "เมทัลชีท" in roof_type else 26.0
+        steel_factor = mat_spec["steel_factor"]
         tot_steel_weight = real_roof_area * steel_factor * (1 + waste_rebar)
 
-        mat_cost = (tile_area * p_roof_tile) + (tot_steel_weight * p_rb9) + (ridge_len * p_roof_cap)
-        lab_cost = (tile_area * labour_roof_tile) + (tot_steel_weight * labour_rebar)
+        p_tile = mat_spec["mat"]
+        l_tile = mat_spec["lab"]
+
+        mat_cost = (tile_area * p_tile) + (tot_steel_weight * p_rb9) + (ridge_len * p_roof_cap)
+        lab_cost = (tile_area * l_tile) + (tot_steel_weight * labour_rebar)
 
         add_takeoff_item({
             "หมวด": "งานหลังคา",
             "รายการ": roof_name,
-            "รายละเอียด": f"ผัง {roof_plan_w:.1f}x{roof_plan_l:.1f}ม. (ราบ {plan_area:.1f} ตร.ม.) | มุงเอียง {real_roof_area:.1f} ตร.ม. (ครอบ {ridge_len:.1f} ม.)",
+            "รายละเอียด": f"{roof_shape} | {roof_material} | มุงจริง {real_roof_area:.1f} ตร.ม. (ครอบ {ridge_len:.1f} ม.)",
             "จำนวน": 1,
             "คอนกรีต (ลบ.ม.)": 0.0,
             "เหล็ก (กก.)": round(tot_steel_weight, 2),
@@ -992,7 +1030,7 @@ with tabs[8]:
         })
 
 # =========================================================
-# TAB 10: 🧮 คำนวณ - [Upgraded V6.5 Action Buttons & Undo]
+# TAB 10: 🧮 คำนวณ
 # =========================================================
 with tabs[9]:
     st.subheader(f"🧮 สรุปปริมาณวัสดุก่อสร้างรวมละเอียดยิบ — [{active_proj_name}]")
@@ -1062,10 +1100,18 @@ with tabs[9]:
 
         st.markdown("---")
         st.markdown("#### 📋 4. รายการคำนวณทั้งหมดในโครงการ")
-        df_all = pd.DataFrame(items)
+        
+        display_items = []
+        for it in items:
+            it_copy = it.copy()
+            if "เหล็กแยกชนิด" in it_copy:
+                del it_copy["เหล็กแยกชนิด"]
+            display_items.append(it_copy)
+
+        df_all = pd.DataFrame(display_items)
         st.dataframe(df_all, use_container_width=True)
         
-        c_del1, c_del2, c_space = st.columns([2.5, 3.5, 6])
+        c_del1, c_del2, _ = st.columns([2.5, 3.5, 6])
         if c_del1.button("↩️ ลบรายการล่าสุด (Undo)", type="secondary"):
             p_idx = get_current_project_index()
             if p_idx != -1 and len(st.session_state["projects"][p_idx]["items"]) > 0:
@@ -1082,7 +1128,7 @@ with tabs[9]:
         st.info("ยังไม่มีรายการถอดแบบในโครงการนี้ กรุณากรอกข้อมูลใน Tab หมวดงานต่างๆ ด้านบน")
 
 # =========================================================
-# TAB 11: 📋 BOQ - [Upgraded V6.5 Excel & Category Breakdown]
+# TAB 11: 📋 BOQ
 # =========================================================
 with tabs[10]:
     st.subheader(f"📋 ตาราง BOQ (Bill of Quantities) — [{active_proj_name}]")
@@ -1090,6 +1136,8 @@ with tabs[10]:
     
     if items:
         df = pd.DataFrame(items)
+        df["ค่าวัสดุ (บาท)"] = df["ค่าวัสดุ (บาท)"].fillna(0.0)
+        df["ค่าแรง (บาท)"] = df["ค่าแรง (บาท)"].fillna(0.0)
         df["รวมเป็นเงิน (บาท)"] = df["ค่าวัสดุ (บาท)"] + df["ค่าแรง (บาท)"]
         
         show_cols = ["หมวด", "รายการ", "รายละเอียด", "จำนวน", "ค่าวัสดุ (บาท)", "ค่าแรง (บาท)", "รวมเป็นเงิน (บาท)"]
@@ -1119,7 +1167,7 @@ with tabs[10]:
         b_c1, b_c2, b_c3 = st.columns(3)
         b_c1.metric("1. ค่างานต้นทุนตรง (วัสดุ+ค่าแรง)", f"฿{subtotal_direct:,.2f}")
         b_c2.metric(f"2. ค่าดำเนินการ & กำไร ({profit_percent*100:.0f}%)", f"฿{overhead_amount:,.2f}")
-        b_c3.metric(f"3. ภาษีมูลค่าเพิ่ม (VAT 7%)", f"฿{vat_amount:,.2f}" if use_vat else "฿0.00 (ไม่คิด VAT)")
+        b_c3.metric("3. ภาษีมูลค่าเพิ่ม (VAT 7%)", f"฿{vat_amount:,.2f}" if use_vat else "฿0.00 (ไม่คิด VAT)")
         
         st.subheader(f"💵 สรุปยอดสุทธิทั้งสิ้น (Grand Total): ฿{grand_total_boq:,.2f}")
 
@@ -1128,7 +1176,6 @@ with tabs[10]:
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 formatted_df.to_excel(writer, index=False, sheet_name='BOQ_Data')
                 
-                # สรุปแยกหมวดงาน
                 cat_summary = df.groupby("หมวด")[["ค่าวัสดุ (บาท)", "ค่าแรง (บาท)", "รวมเป็นเงิน (บาท)"]].sum().reset_index()
                 cat_summary.to_excel(writer, index=False, sheet_name='หมวดงาน')
 
@@ -1151,13 +1198,13 @@ with tabs[10]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary"
             )
-        except Exception as e:
+        except Exception:
             st.error("⚠️ ไม่สามารถสร้างไฟล์ Excel ได้ กรุณาตรวจสอบว่าได้ติดตั้ง 'openpyxl' แล้วหรือยัง (pip install openpyxl)")
     else:
         st.warning("ยังไม่มีรายการ BOQ ในโครงการนี้")
 
 # =========================================================
-# TAB 12: 📊 สรุป - [Upgraded V6.5 Chart & Category Metrics]
+# TAB 12: 📊 สรุป
 # =========================================================
 with tabs[11]:
     st.subheader(f"📊 สรุปงบประมาณรวมทั้งโครงการ — [{active_proj_name}]")
@@ -1165,8 +1212,8 @@ with tabs[11]:
     
     if items:
         df = pd.DataFrame(items)
-        subtotal_mat = df["ค่าวัสดุ (บาท)"].sum()
-        subtotal_lab = df["ค่าแรง (บาท)"].sum()
+        subtotal_mat = df["ค่าวัสดุ (บาท)"].sum() if "ค่าวัสดุ (บาท)" in df else 0.0
+        subtotal_lab = df["ค่าแรง (บาท)"].sum() if "ค่าแรง (บาท)" in df else 0.0
         subtotal_direct = subtotal_mat + subtotal_lab
         
         overhead_amount = subtotal_direct * profit_percent
@@ -1185,7 +1232,7 @@ with tabs[11]:
         
         cat_df = df.groupby("หมวด")[["ค่าวัสดุ (บาท)", "ค่าแรง (บาท)"]].sum()
         cat_df["รวมทั้งสิ้น (บาท)"] = cat_df["ค่าวัสดุ (บาท)"] + cat_df["ค่าแรง (บาท)"]
-        cat_df["สัดส่วน (%)"] = (cat_df["รวมทั้งสิ้น (บาท)"] / subtotal_direct * 100).round(2)
+        cat_df["สัดส่วน (%)"] = (cat_df["รวมทั้งสิ้น (บาท)"] / (subtotal_direct if subtotal_direct > 0 else 1) * 100).round(2)
         
         st.dataframe(cat_df.style.format({
             "ค่าวัสดุ (บาท)": "฿{:,.2f}",
