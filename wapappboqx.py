@@ -24,7 +24,7 @@ except ImportError:
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V8.3.1 Reliability + Drawing Reader",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ Reliability + Drawing Reader",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
