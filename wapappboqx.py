@@ -24,7 +24,7 @@ except ImportError:
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V8.1 Final Audit + Current Prices",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ V8.3.1 Reliability + Drawing Reader",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -366,6 +366,41 @@ def normalize_rebar_type(raw):
     x = x.replace("D", "DB", 1) if x.startswith("D") and not x.startswith("DB") else x
     return x if x in REBAR_WEIGHT else None
 
+def infer_rebar_position(text, start, end):
+    """หาตำแหน่งเหล็กจากคำบอกตำแหน่งที่ใกล้กับเหล็กชุดนั้นที่สุด เพื่อลดการนำคำว่า ‘เหล็กปลอก’ ไปติดกับเหล็กหลักอีกชุด"""
+    t = normalize_drawing_text(text)
+    role_patterns = [
+        ("เหล็กปลอก", "เหล็กปลอก"), ("stirrup", "เหล็กปลอก"), ("tie", "เหล็กปลอก"),
+        ("เหล็กบน", "เหล็กบน"), ("top", "เหล็กบน"),
+        ("เหล็กล่าง", "เหล็กล่าง"), ("bottom", "เหล็กล่าง"),
+    ]
+    best = None
+    for pattern, label in role_patterns:
+        for m in re.finditer(pattern, t[max(0, start-24):min(len(t), end+24)], re.I):
+            base = max(0, start-24)
+            abs_start = base + m.start()
+            abs_end = base + m.end()
+            # ถ้ามีเหล็กอีกตัวคั่นระหว่างเหล็กเป้าหมายกับคำบอกตำแหน่ง
+            # จะไม่ใช้คำบอกตำแหน่งนั้นกับเหล็กตัวแรก
+            if abs_start > end:
+                between = t[end:abs_start]
+            elif abs_end < start:
+                between = t[abs_end:start]
+            else:
+                between = ""
+            if re.search(r"(?:DB|RB)\s*\d+", between, re.I):
+                continue
+            if abs_end < start:
+                dist = start - abs_end
+            elif abs_start > end:
+                dist = abs_start - end
+            else:
+                dist = 0
+            if dist <= 18 and (best is None or dist < best[0]):
+                best = (dist, label)
+    return best[1] if best else "เหล็กเสริมพิเศษ"
+
+
 def parse_rebar_specs(context):
     rows = []
     seen = set()
@@ -376,16 +411,7 @@ def parse_rebar_specs(context):
         if not rtype:
             continue
         spacing = spacing_to_m(m.group(2), m.group(3))
-        local_after = text[m.end():m.end()+28]
-        local_before = text[max(0, m.start()-28):m.start()]
-        if re.search(r"ปลอก|stirrup|tie", local_after + " " + local_before, re.I):
-            pos = "เหล็กปลอก"
-        elif re.search(r"(?:บน|top)\b", local_after, re.I):
-            pos = "เหล็กบน"
-        elif re.search(r"(?:ล่าง|bottom)\b", local_after, re.I):
-            pos = "เหล็กล่าง"
-        else:
-            pos = "เหล็กเสริมพิเศษ"
+        pos = infer_rebar_position(text, m.start(), m.end())
         key = (rtype, "spacing", round(spacing, 6), pos)
         if key not in seen and spacing > 0:
             rows.append({"pos": pos, "type": rtype, "mode": "ระยะห่าง (@ ม.)", "val": spacing, "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
@@ -401,16 +427,7 @@ def parse_rebar_specs(context):
             if not rtype:
                 continue
             count = max(1, int(round(_num_token(count_raw))))
-            local_after = text[m.end():m.end()+28]
-            local_before = text[max(0, m.start()-28):m.start()]
-            if re.search(r"ปลอก|stirrup|tie", local_after + " " + local_before, re.I):
-                pos = "เหล็กปลอก"
-            elif re.search(r"(?:บน|top)\b", local_after, re.I):
-                pos = "เหล็กบน"
-            elif re.search(r"(?:ล่าง|bottom)\b", local_after, re.I):
-                pos = "เหล็กล่าง"
-            else:
-                pos = "เหล็กเสริมพิเศษ"
+            pos = infer_rebar_position(text, m.start(), m.end())
             key = (rtype, "count", count, pos)
             if key not in seen:
                 rows.append({"pos": pos, "type": rtype, "mode": "จำนวน (เส้น)", "val": float(count), "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
@@ -449,6 +466,22 @@ def _sheet_tags_from_context(context, page_no):
     return list(dict.fromkeys(m.group(0).upper().replace(" ", "") for m in re.finditer(r"\b(?:S|ST|A|AR|STR|ARCH)-\d{2,4}\b", normalize_drawing_text(context), re.I)))
 
 
+DRAWING_CONTEXT_KEYWORDS = {
+    "F": ("ฐานราก", "ฐาน", "footing", "foundation", "pile cap"),
+    "C": ("เสา", "column", "col.", "reinforced concrete"),
+    "B": ("คาน", "beam", "girder"),
+    "S": ("พื้น", "slab", "floor", "deck"),
+    "W": ("ผนัง", "wall", "partition"),
+    "R": ("หลังคา", "roof", "rafter", "purlin", "truss"),
+    "D": ("ประตู", "หน้าต่าง", "door", "window", "frame", "วงกบ"),
+}
+
+def mark_context_supported(kind, text):
+    src = normalize_drawing_text(text).lower()
+    terms = DRAWING_CONTEXT_KEYWORDS.get(kind, ())
+    return any(term.lower() in src for term in terms)
+
+
 def _candidate_from_context(mark_match, context, page_no, surrounding_context=""):
     raw_mark = mark_match.group(1) if mark_match.lastindex else mark_match.group(0)
     raw_clean = raw_mark.strip().upper()
@@ -465,6 +498,18 @@ def _candidate_from_context(mark_match, context, page_no, surrounding_context=""
     kind = mark[0]
     target = {"F":"ฐานราก","C":"เสา","B":"คาน","S":"พื้น","W":"ผนัง","R":"หลังคา","D":"ประตู-หน้าต่าง"}.get(kind,"อื่นๆ")
     ctx = normalize_drawing_text(context)
+    full_context = normalize_drawing_text((surrounding_context or "") + " " + ctx)
+    # ลดรหัสหลงจาก Drawing/Architecture เช่น D1 ที่เป็น detail ไม่ใช่ประตู และ R1/S1 ที่ไม่ได้หมายถึงสมาชิกนั้น
+    # ยอมให้ผ่านเมื่อมีหลักฐานทางมิติ/เหล็ก/โปรไฟล์เพียงพอ แต่ยังคงติดสถานะต้องตรวจเสมอ
+    context_supported = mark_context_supported(kind, full_context)
+    if not context_supported and kind in ("D", "R", "W"):
+        has_structural_evidence = bool(DIM_RE.search(ctx) or REBAR_SPACING_RE.search(ctx) or STEEL_PROFILE_RE.search(ctx))
+        if kind == "D" and not (DIM_RE.search(ctx) and re.search(r"door|window|ประตู|หน้าต่าง|บาน|วงกบ", full_context, re.I)):
+            return None
+        if kind == "R" and not (STEEL_PROFILE_RE.search(ctx) or re.search(r"roof|หลังคา|rafter|purlin|truss", full_context, re.I)):
+            return None
+        if kind == "W" and not (DIM_RE.search(ctx) and re.search(r"wall|ผนัง|partition", full_context, re.I)):
+            return None
     dims=[]
     clean_ctx=STEEL_PROFILE_RE.sub(" ", ctx)
     for dm in DIM_RE.finditer(clean_ctx):
@@ -544,6 +589,9 @@ def parse_drawing_candidates(page_text, page_no, blocks=None):
             if not matches: continue
             own_text, nearby=_block_nearby_texts(blocks,i)
             for mi,mm in enumerate(matches):
+                # C-3 / B-2 ที่อยู่หลังคำว่า Grid เป็นพิกัด ไม่ใช่รหัสสมาชิก
+                if ("-" in mm.group(0) or "." in mm.group(0)) and re.search(r"Grid\s*$", block_text[max(0,mm.start()-24):mm.start()], re.I):
+                    continue
                 next_pos=matches[mi+1].start() if mi+1<len(matches) else len(block_text)
                 # กันข้อมูลของ C1 รายการถัดไปไหลย้อนเข้ารายการปัจจุบัน
                 local_start=max(0,mm.start()-90)
@@ -569,10 +617,17 @@ def parse_drawing_candidates(page_text, page_no, blocks=None):
         for i,mm in enumerate(matches):
             raw_mark=mm.group(1) if mm.lastindex else mm.group(0)
             norm_mark=re.sub(r"\s+","",raw_mark.upper())
+            if ("-" in mm.group(0) or "." in mm.group(0)) and re.search(r"Grid\s*$", text[max(0,mm.start()-24):mm.start()], re.I):
+                continue
             if norm_mark in block_marks:
                 continue
-            start=max(0,mm.start()-100); end=min(len(text),matches[i+1].start() if i+1<len(matches) else mm.end()+420)
-            c=_candidate_from_context(mm,text[start:end],page_no,text)
+            start=mm.start(); end=min(len(text),matches[i+1].start() if i+1<len(matches) else mm.end()+420)
+            segment=text[start:end]
+            local_match=re.search(re.escape(mm.group(0)), segment)
+            if not local_match:
+                continue
+            source_context=text[max(0,mm.start()-140):end]
+            c=_candidate_from_context(local_match,segment,page_no,source_context)
             if c:
                 c["location_key"]=f"{page_no}:full:{i}"
                 candidates.append(c)
@@ -583,10 +638,17 @@ def parse_drawing_candidates(page_text, page_no, blocks=None):
         for i,mm in enumerate(matches):
             raw_mark=mm.group(1) if mm.lastindex else mm.group(0)
             norm_mark=re.sub(r"\s+","",raw_mark.upper())
+            if ("-" in mm.group(0) or "." in mm.group(0)) and re.search(r"Grid\s*$", text[max(0,mm.start()-24):mm.start()], re.I):
+                continue
             if norm_mark in block_marks:
                 continue
-            start=max(0,mm.start()-100); end=min(len(text),matches[i+1].start() if i+1<len(matches) else mm.end()+420)
-            c=_candidate_from_context(mm,text[start:end],page_no,text)
+            start=mm.start(); end=min(len(text),matches[i+1].start() if i+1<len(matches) else mm.end()+420)
+            segment=text[start:end]
+            local_match=re.search(re.escape(mm.group(0)), segment)
+            if not local_match:
+                continue
+            source_context=text[max(0,mm.start()-140):end]
+            c=_candidate_from_context(local_match,segment,page_no,source_context)
             if c:
                 c["location_key"]=f"{page_no}:full:{i}"
                 candidates.append(c)
@@ -648,8 +710,10 @@ def read_drawing_pdf(file_bytes, use_ocr=True, max_pages=80, dpi=160):
         if not text.strip():
             continue
         # ใช้ทั้ง spatial blocks และข้อความทั้งหน้า แล้วคัดตัวที่มีหลักฐานมากกว่า
-        candidates.extend(parse_drawing_candidates(text,page_no,blocks=blocks))
-        candidates.extend(parse_drawing_candidates(text,page_no,blocks=None))
+        if blocks:
+            candidates.extend(parse_drawing_candidates(text,page_no,blocks=blocks))
+        else:
+            candidates.extend(parse_drawing_candidates(text,page_no,blocks=None))
     page_count=len(doc);doc.close()
     return {"page_count":page_count,"pages_read":len(page_texts),"ocr_pages":ocr_pages,"ocr_languages":list(dict.fromkeys(ocr_languages)),"ocr_available":pytesseract is not None and Image is not None,"candidates":candidates,"reader_mode":"ข้อความใน PDF + OCR เฉพาะหน้าที่จำเป็น"}
 
@@ -672,9 +736,9 @@ def drawing_source_tags(context, page_no, mark):
     grids = list(dict.fromkeys(m.group(0) for m in GRID_RE.finditer(normalize_drawing_text(context))))
     parts = [f"หน้า {page_no}"]
     if sheets:
-        parts.append(f"แผ่นแบบ {sheets[0]}")
+        parts.append(f"แผ่นแบบ {sheets[-1]}")
     if grids:
-        grid_text = re.sub(r"^Grid\s*", "", grids[0], flags=re.I)
+        grid_text = re.sub(r"^Grid\s*", "", grids[-1], flags=re.I)
         parts.append(f"ตำแหน่ง {grid_text}")
     parts.append(f"รหัส {mark}")
     return " | ".join(parts)
@@ -891,14 +955,14 @@ DEFAULT_BEAM_REBARS = []
 DEFAULT_SLAB_REBARS = []
 
 def reset_draft_for_project(project_id):
-    """แยกร่างเหล็กตามโครงการ เพื่อไม่ให้รายการร่างจากโครงการหนึ่งไหลไปอีกโครงการ"""
+    """แยกร่างตามโครงการ และเริ่มต้นแบบว่าง เพื่อไม่ให้โปรแกรมเดาเหล็กจากแบบที่ยังไม่ได้อ่าน"""
     if "_draft_project_id" not in st.session_state:
         st.session_state["_draft_project_id"] = None
     if project_id != st.session_state.get("_draft_project_id"):
-        st.session_state["footing_rebars"] = copy.deepcopy(DEFAULT_FOOTING_REBARS)
-        st.session_state["column_rebars"] = copy.deepcopy(DEFAULT_COLUMN_REBARS)
-        st.session_state["beam_rebars"] = copy.deepcopy(DEFAULT_BEAM_REBARS)
-        st.session_state["slab_rebars"] = copy.deepcopy(DEFAULT_SLAB_REBARS)
+        st.session_state["footing_rebars"] = []
+        st.session_state["column_rebars"] = []
+        st.session_state["beam_rebars"] = []
+        st.session_state["slab_rebars"] = []
         st.session_state["roof_members"] = []
         st.session_state["_draft_project_id"] = project_id
 
@@ -1001,6 +1065,12 @@ if "drawing_reader_result" not in st.session_state:
     st.session_state["drawing_reader_result"] = None
 if "drawing_prefill" not in st.session_state:
     st.session_state["drawing_prefill"] = None
+if "pending_duplicate_item" not in st.session_state:
+    st.session_state["pending_duplicate_item"] = None
+if "pending_duplicate_reason" not in st.session_state:
+    st.session_state["pending_duplicate_reason"] = ""
+if "pending_duplicate_project_id" not in st.session_state:
+    st.session_state["pending_duplicate_project_id"] = None
 
 def safe_filename(name, default="project"):
     """ทำชื่อไฟล์ให้ปลอดภัยสำหรับ Windows/OneDrive/SharePoint"""
@@ -1030,17 +1100,27 @@ def add_takeoff_item(item_data, allow_duplicate=False):
     if prevent_duplicates and not allow_duplicate:
         dup = find_duplicate_item(item)
         if dup is not None:
-            st.warning(
-                f"⛔ พบรายการซ้ำและระบบยังไม่บันทึก: **{item.get('รายการ', 'ไม่ระบุ')}**"
-                + (f" | {get_item_source(item)}" if get_item_source(item) else " | ยังไม่มีอ้างอิงจากแบบ")
-            )
-            st.caption("ตรวจว่าเป็นตำแหน่งเดิมหรือไม่ หากเป็นคนละตำแหน่งให้ใส่ ‘อ้างอิงจากแบบ’ ให้ต่างกัน หรือปิด ‘ป้องกันรายการ BOQ ซ้ำ’ ชั่วคราวแล้วบันทึกใหม่")
+            st.session_state["pending_duplicate_item"] = copy.deepcopy(item)
+            st.session_state["pending_duplicate_project_id"] = st.session_state["projects"][p_idx].get("id")
+            if get_item_source(item):
+                st.session_state["pending_duplicate_reason"] = (
+                    f"พบรายการซ้ำ: {item.get('รายการ', 'ไม่ระบุ')} | อ้างอิงจากแบบ {get_item_source(item)}"
+                )
+            else:
+                st.session_state["pending_duplicate_reason"] = (
+                    f"พบรายการชื่อและรายละเอียดเหมือนกัน: {item.get('รายการ', 'ไม่ระบุ')} แต่ยังไม่ได้ใส่อ้างอิงจากแบบ"
+                )
+            st.warning("⚠️ พบรายการซ้ำ ระบบยังไม่บันทึก — ไปที่แถบแจ้งเตือนด้านบนเพื่อยืนยันหากเป็นคนละตำแหน่ง")
             return False
 
     near_hits = find_near_duplicate_items(item)
     if near_hits and not allow_duplicate and not find_duplicate_item(item):
-        st.warning("⚠ พบรายการหมวด + ชื่อรายการ + อ้างอิงจากแบบเหมือนกันอยู่แล้ว — ระบบยังไม่บันทึกเพื่อป้องกัน BOQ ซ้ำ")
-        st.caption("ตรวจตำแหน่งจากแบบก่อน หากเป็นคนละตำแหน่งให้เปลี่ยน ‘อ้างอิงจากแบบ’ ให้ชัดเจน")
+        st.session_state["pending_duplicate_item"] = copy.deepcopy(item)
+        st.session_state["pending_duplicate_project_id"] = st.session_state["projects"][p_idx].get("id")
+        st.session_state["pending_duplicate_reason"] = (
+            f"พบรายการหมวด + ชื่อรายการ + อ้างอิงจากแบบเหมือนกันอยู่แล้ว: {item.get('รายการ', 'ไม่ระบุ')}"
+        )
+        st.warning("⚠️ พบรายการที่อาจซ้ำ ระบบยังไม่บันทึก — ตรวจรายการก่อนยืนยัน")
         return False
 
     if "items" not in st.session_state["projects"][p_idx]:
@@ -1049,6 +1129,40 @@ def add_takeoff_item(item_data, allow_duplicate=False):
     save_projects()
     st.success(f"บันทึกรายการ '{item.get('รายการ', 'ไม่ระบุ')}' เรียบร้อยแล้ว!")
     return True
+
+
+def render_pending_duplicate_confirmation():
+    pending = st.session_state.get("pending_duplicate_item")
+    if not pending:
+        return
+    if st.session_state.get("pending_duplicate_project_id") != st.session_state.get("current_project_id"):
+        st.session_state["pending_duplicate_item"] = None
+        st.session_state["pending_duplicate_reason"] = ""
+        st.session_state["pending_duplicate_project_id"] = None
+        return
+    st.warning("⚠️ **ตรวจรายการซ้ำก่อนบันทึก** — " + st.session_state.get("pending_duplicate_reason", "พบรายการที่อาจซ้ำ"))
+    st.caption("ตรวจว่าเป็นคนละตำแหน่ง/คนละช่วงงานจริงก่อนยืนยัน เพราะการยืนยันจะบันทึกรายการซ้ำได้")
+    c1, c2 = st.columns(2)
+    if c1.button("✅ ยืนยันว่าเป็นรายการคนละตำแหน่งและบันทึก", key="confirm_pending_duplicate", type="primary"):
+        item = copy.deepcopy(pending)
+        st.session_state["pending_duplicate_item"] = None
+        st.session_state["pending_duplicate_reason"] = ""
+        st.session_state["pending_duplicate_project_id"] = None
+        add_takeoff_item(item, allow_duplicate=True)
+        st.rerun()
+    if c2.button("ยกเลิก", key="cancel_pending_duplicate"):
+        st.session_state["pending_duplicate_item"] = None
+        st.session_state["pending_duplicate_reason"] = ""
+        st.session_state["pending_duplicate_project_id"] = None
+        st.rerun()
+
+def rebar_save_guard(rows, key, label):
+    """กันการเผลอบันทึกงาน คสล. โดยไม่มีข้อมูลเหล็กจากแบบ; ผู้ใช้ยืนยันได้เมื่อต้องการบันทึกแบบชั่วคราว"""
+    if rows:
+        return True
+    st.warning(f"⚠️ {label}: ยังไม่มีเหล็กจากแบบ — ระบบไม่เดาเหล็กให้")
+    return st.checkbox("ยืนยันว่าตอนนี้ยังไม่ระบุเหล็กจากแบบ", value=False, key=key,
+                       help="ใช้เมื่อต้องการบันทึกปริมาณคอนกรีต/ไม้แบบก่อน แล้วค่อยกลับมาเติมเหล็กภายหลัง")
 
 # ราคาตั้งต้นตามขนาดเหล็กเส้น: ค่าเฉลี่ยประเทศจาก MOC ส.ค. 2569 เมื่อมีข้อมูลตรง; ขนาดอื่นเป็นราคาอ้างอิงตลาด/ประมาณการ
 CURRENT_REBAR_PRICES.update({
@@ -1077,8 +1191,8 @@ labour_ceiling = 110.0
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("⚙ ตั้งค่าราคาและค่าแรง")
-    st.info("**ชุดราคาอ้างอิง 2569**: วัสดุอ้างอิงจากข้อมูลกระทรวงพาณิชย์ที่ตรวจสอบได้ล่าสุด (ส.ค. 2569) และค่าแรงจากบัญชี ว480 ลงวันที่ 26 มิ.ย. 2569 — ราคาอ้างอิงวัสดุส่วนใหญ่ไม่รวม VAT และราคาจริงควรปรับตามจังหวัด/ผู้ขาย/ใบเสนอราคา")
-    st.caption("🔄 ราคาอ้างอิงตรวจสอบล่าสุดใน V8.1 | **แก้ราคาเองได้ทุกช่อง**")
+    st.info("**ชุดราคาอ้างอิงในระบบ**: ราคาวัสดุอ้างอิงข้อมูลกระทรวงพาณิชย์ที่บันทึกล่าสุดในระบบ (ส.ค. 2569) และค่าแรงจากบัญชี ว480 ลงวันที่ 26 มิ.ย. 2569 — ราคาแต่ละจังหวัด/ผู้ขายอาจต่างกัน และแก้ราคาเองได้ทุกช่อง")
+    st.caption("📅 วันที่ราคาอ้างอิงที่บันทึกในระบบ: ส.ค. 2569 | **แก้ราคาเองได้ทุกช่อง**")
     st.caption("💡 **ใช้งานง่าย:** ถ้าไม่แน่ใจ ให้ใช้ค่าเริ่มต้นได้เลย แล้วแก้เฉพาะ ราคา ตามใบเสนอราคาจริงของคุณ — ราคาด้านล่างเป็นราคาอ้างอิงและยังแก้เองได้ทุกช่อง")
     
     with st.expander("💼 ค่าดำเนินการ กำไร & ภาษี", expanded=True):
@@ -1112,7 +1226,7 @@ with st.sidebar:
             )
         p_db12 = safe_num(CURRENT_REBAR_PRICES.get("DB12", 20.65))
         p_rb9 = safe_num(CURRENT_REBAR_PRICES.get("RB9", 21.32))
-        st.caption("ค่า RB6/RB9/DB12/DB16/DB20 อ้างอิงค่าเฉลี่ยประเทศ MOC ส.ค. 2569; ขนาดอื่นเป็นราคาอ้างอิงตลาด/ประมาณการ ตั้งต้น — แก้เองได้")
+        st.caption("RB6/RB9/DB12/DB16/DB20 ใช้ค่าอ้างอิงที่บันทึกจาก MOC ส.ค. 2569; ขนาดอื่นเป็นราคาอ้างอิงตลาด/ประมาณการ — แก้เองได้")
 
     with st.expander("📌 ราคาและค่าแรงเสาเข็ม", expanded=False):
         p_pile_hex = st.number_input("เข็มหกเหลี่ยมกลวง (บาท/ม.)", min_value=0.0, value=120.0, step=10.0)
@@ -1129,7 +1243,7 @@ with st.sidebar:
         labour_concrete = 421.0 if concrete_labor_basis.startswith("อาคารชั้นเดียว") else (522.0 if concrete_labor_basis.startswith("อาคารหลายชั้น") else labour_concrete_manual)
         st.caption(f"อัตราที่ระบบใช้ตอนนี้: {labour_concrete:,.0f} บาท/ลบ.ม.")
         use_w480_rebar_labor = st.checkbox("ค่าแรงผูกเหล็ก: ใช้ ว480 แยกตามขนาด (แนะนำ)", value=True, help="ถ้าปิด ระบบจะใช้อัตราที่คุณกรอกด้านล่างกับเหล็กทุกขนาด")
-        labour_rebar = st.number_input("ค่าแรงผูกเหล็กเส้น (อัตราเอง) (บาท/กก.)", min_value=0.0, value=3.9, step=0.5)
+        labour_rebar = st.number_input("ค่าแรงผูกเหล็กเส้น (ใช้เมื่อไม่ใช้ ว480) (บาท/กก.)", min_value=0.0, value=3.9, step=0.5)
         labour_formwork = st.number_input("ค่าแรงประกอบไม้แบบ (บาท/ตร.ม.)", min_value=0.0, value=163.0, step=10.0)
 
     with st.expander("📉 เผื่อจัดซื้อ (Waste)", expanded=False):
@@ -1156,6 +1270,8 @@ with st.sidebar:
         stirrup_hook_extra_m = st.number_input("เผื่อความยาวตะขอเหล็กปลอก (ม./วง)", min_value=0.0, max_value=1.0, value=0.10, step=0.01)
         waste_roof_steel = st.number_input("เผื่อโครงเหล็กหลังคา (%)", min_value=0.0, max_value=100.0, value=5.0) / 100.0
         prevent_duplicates = st.checkbox("ป้องกันรายการ BOQ ซ้ำ", value=True, help="ระบบกันรายการซ้ำตรงกัน และเตือนรายการที่ใช้หมวด+ชื่อ+ที่มาในแบบเดียวกัน")
+
+render_pending_duplicate_confirmation()
 
 # ---------------------------------------------------------
 # ราคาประเภทงานเพิ่มเติม: แก้ได้ทุกตัว (reference / benchmark)
@@ -1327,7 +1443,7 @@ for k in DOOR_WINDOW_TYPES:
 # ---------------------------------------------------------
 st.markdown(f"""
 <div class="header-banner">
-    <div class="header-title">⚙️ ระบบถอดปริมาณงานโครงสร้าง & สถาปัตย์ (Takeoff V8.2.9 Final Reliability Audit + Drawing Reader)</div>
+    <div class="header-title">⚙️ ระบบถอดปริมาณงานโครงสร้าง & สถาปัตย์ (Takeoff V8.3.1 Reliability + Drawing Reader)</div>
     <div class="header-subtitle">📁 โครงการปัจจุบัน: <b>{active_proj_name}</b></div>
 </div>
 """, unsafe_allow_html=True)
@@ -1511,9 +1627,9 @@ with tabs[0]:
                 if c.get("target") in ("ฐานราก","เสา","คาน","พื้น") and not evidence.get("ขนาด"): missing.append("ขนาด")
                 if c.get("target") in ("เสา","คาน") and not evidence.get("ความยาว/สูง"): missing.append("สูง/ยาว")
                 if c.get("target") in ("ฐานราก","เสา","คาน","พื้น") and not evidence.get("เหล็ก"): missing.append("เหล็ก")
-                conf="ดี" if c["confidence"]>=0.8 else ("พอใช้" if c["confidence"]>=0.65 else "ต้องตรวจมาก")
+                conf="ข้อมูลค่อนข้างครบ" if c["confidence"]>=0.8 else ("ข้อมูลบางส่วน" if c["confidence"]>=0.65 else "ต้องตรวจมาก")
                 review="ต้องตรวจ — " + ", ".join(missing) if missing else "ต้องตรวจเทียบแบบ"
-                rows.append({"#":idx+1,"หน้า":c["page"],"รหัส":c["mark"],"ไปที่":c["target"],"ขนาด/ความยาว":dims,"เหล็กที่อ่านได้":rb,"โครงเหล็กที่อ่านได้":steel,"ระดับข้อมูลที่อ่านได้":f"{conf} ({c['confidence']:.0%})","สถานะ":review})
+                rows.append({"#":idx+1,"หน้า":c["page"],"รหัส":c["mark"],"ไปที่":c["target"],"ขนาด/ความยาว":dims,"เหล็กที่อ่านได้":rb,"โครงเหล็กที่อ่านได้":steel,"ระดับข้อมูลที่อ่านได้":conf,"สถานะ":review})
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             options=[f"#{i+1} | หน้า {c['page']} | {c['mark']} → {c['target']}" for i,c in enumerate(candidates)]
             sel=st.selectbox("เลือกรายการจากแบบที่ต้องการนำไปใช้", options, key="drawing_candidate_select")
@@ -1530,6 +1646,18 @@ with tabs[0]:
             else:
                 st.warning("🔍 ระบบอ่านข้อมูลได้หลายส่วน แต่ยังต้องตรวจเทียบกับแบบจริงก่อนบันทึก BOQ")
             st.info(f"เลือกแล้ว: **{chosen['mark']}** | {dims} | เหล็ก: {rb} | โครงเหล็ก: {steel} | {chosen['source']}\n\n⚠️ ข้อมูลจาก PDF เป็นข้อมูลช่วยกรอก ไม่ใช่การยืนยันแบบ — ตรวจเทียบแบบจริงก่อนบันทึก BOQ ทุกครั้ง")
+            if pdf_file is not None and fitz is not None:
+                if st.button(f"👁 ดูหน้าแบบที่พบ {chosen['mark']}", key="btn_preview_drawing_page"):
+                    try:
+                        preview_doc=fitz.open(stream=pdf_file.getvalue(),filetype="pdf")
+                        preview_page=preview_doc.load_page(max(0,int(chosen.get("page",1))-1))
+                        preview_pix=preview_page.get_pixmap(matrix=fitz.Matrix(1.15,1.15),alpha=False)
+                        preview_img=Image.frombytes("RGB",[preview_pix.width,preview_pix.height],preview_pix.samples) if Image is not None else None
+                        if preview_img is not None:
+                            st.image(preview_img,caption=f"หน้า {chosen.get('page')} — ใช้ตรวจเทียบแบบจริง",use_container_width=True)
+                        preview_doc.close()
+                    except Exception as preview_exc:
+                        st.warning(f"ไม่สามารถแสดงหน้าแบบได้: {preview_exc}")
             if st.button(f"📌 นำ {chosen['mark']} ไปใช้ในงาน{chosen['target']}", key="btn_queue_drawing_candidate"):
                 if chosen["target"] in DRAWING_TAB_KEYS:
                     queue_drawing_candidate(chosen)
@@ -1581,7 +1709,7 @@ with tabs[1]:
     st.markdown("---")
     st.markdown("#### 🔩 เหล็กเสริมฐานราก")
     if not st.session_state["footing_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้")
+        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มรายการเหล็ก’ หรือใช้ข้อมูลจาก Drawing Reader")
     if st.button("➕ เพิ่มรายการเหล็ก", key="btn_add_f_rebar"):
         st.session_state["footing_rebars"].append({"pos": "เหล็กวิ่งตามยาว", "type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50, "lap_mode": "ไม่มี", "lap_ends": 0})
         st.rerun()
@@ -1617,7 +1745,10 @@ with tabs[1]:
         st.session_state["footing_rebars"] = [item for i, item in enumerate(st.session_state["footing_rebars"]) if i not in f_rebars_to_remove]
         st.rerun()
 
+    allow_empty_footing_rebar = rebar_save_guard(st.session_state["footing_rebars"], "allow_empty_footing_rebar", "ฐานราก")
     if st.button("➕ บันทึกงานฐานราก", type="primary", key="btn_save_footing"):
+        if not allow_empty_footing_rebar:
+            st.stop()
         net_concrete = f_w * f_l * f_h * f_qty
         vol_concrete = with_waste(net_concrete, waste_concrete)
         net_formwork = (2 * (f_w + f_l) * f_h * f_qty) if "มีไม้แบบ" in f_form_type else 0.0
@@ -1688,7 +1819,7 @@ with tabs[2]:
 
     st.markdown("#### 🔩 เหล็กเสริมเสา")
     if not st.session_state["column_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้")
+        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มเหล็กเสา’ หรือใช้ข้อมูลจาก Drawing Reader")
     st.caption("ถ้าเป็นเหล็กปลอกและเลือก @ ให้ใส่ ‘ความยาวช่วง/เหล็ก’ เป็นความยาวของช่วงที่ใช้ระยะห่างนั้น")
     if st.button("➕ เพิ่มเหล็กเสา", key="btn_add_col_rebar"):
         st.session_state["column_rebars"].append({"pos":"เหล็กแกน","type":"DB12","mode":"จำนวน (เส้น)","val":4.0,"len":col_h,"lap_mode":"ไม่มี","lap_ends":0})
@@ -1713,7 +1844,10 @@ with tabs[2]:
     if c_rebars_to_remove:
         st.session_state["column_rebars"]=[item for i,item in enumerate(st.session_state["column_rebars"]) if i not in c_rebars_to_remove]; st.rerun()
 
+    allow_empty_column_rebar = rebar_save_guard(st.session_state["column_rebars"], "allow_empty_column_rebar", "เสา")
     if st.button("➕ บันทึกงานเสา",type="primary",key="btn_save_col"):
+        if not allow_empty_column_rebar:
+            st.stop()
         net_concrete=col_w*col_l*col_h*col_qty; vol=with_waste(net_concrete,waste_concrete)
         net_form=2*(col_w+col_l)*col_h*col_qty; form=with_waste(net_form,waste_formwork)
         net_rebar_weight=tot_col_rebar_weight*col_qty; rebar_weight=with_waste(net_rebar_weight,waste_rebar)
@@ -1750,7 +1884,7 @@ with tabs[3]:
 
     st.markdown("#### 🔩 เหล็กเสริมคาน")
     if not st.session_state["beam_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้")
+        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มเหล็กคาน’ หรือใช้ข้อมูลจาก Drawing Reader")
     st.caption("ถ้าเป็นเหล็กปลอกและเลือก @ ให้ใส่ ‘ความยาวช่วง/เหล็ก’ เป็นความยาวของช่วงที่ใช้ระยะห่างนั้น")
     if st.button("➕ เพิ่มเหล็กคาน",key="btn_add_beam_rebar"):
         st.session_state["beam_rebars"].append({"pos":"เหล็กบน","type":"DB12","mode":"จำนวน (เส้น)","val":2.0,"len":beam_l,"lap_mode":"ไม่มี","lap_ends":0}); st.rerun()
@@ -1773,7 +1907,10 @@ with tabs[3]:
     if b_rebars_to_remove:
         st.session_state["beam_rebars"]=[item for i,item in enumerate(st.session_state["beam_rebars"]) if i not in b_rebars_to_remove];st.rerun()
 
+    allow_empty_beam_rebar = rebar_save_guard(st.session_state["beam_rebars"], "allow_empty_beam_rebar", "คาน")
     if st.button("➕ บันทึกงานคาน",type="primary",key="btn_save_beam"):
+        if not allow_empty_beam_rebar:
+            st.stop()
         effective_beam_h=max(0.0,beam_h-beam_slab_t) if "หัก" in beam_slab_mode else beam_h
         net_concrete=beam_w*effective_beam_h*beam_l*beam_qty
         vol=with_waste(net_concrete,waste_concrete)
@@ -1822,7 +1959,7 @@ with tabs[4]:
 
     st.markdown("#### 🔩 เหล็กเสริมพื้น")
     if not st.session_state["slab_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้")
+        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มรายการเหล็กพื้น’ หรือใช้ข้อมูลจาก Drawing Reader")
     st.caption("ถ้าเป็นเหล็กปลอกและเลือก @ ให้ใส่ ‘ความยาวช่วง/เหล็ก’ เป็นความยาวของช่วงที่ใช้ระยะห่างนั้น")
     if st.button("➕ เพิ่มรายการเหล็กพื้น",key="btn_add_s_rebar"):
         st.session_state["slab_rebars"].append({"pos":"เหล็กล่าง/ตะแกรงทางยาว","type":"RB9","mode":"ระยะห่าง (@ ม.)","val":0.20,"len":slab_l,"lap_mode":"ไม่มี","lap_ends":0});st.rerun()
@@ -1846,7 +1983,10 @@ with tabs[4]:
     if s_rebars_to_remove:
         st.session_state["slab_rebars"]=[item for i,item in enumerate(st.session_state["slab_rebars"]) if i not in s_rebars_to_remove];st.rerun()
 
+    allow_empty_slab_rebar = rebar_save_guard(st.session_state["slab_rebars"], "allow_empty_slab_rebar", "พื้น")
     if st.button("➕ บันทึกงานพื้น",type="primary",key="btn_save_slab"):
+        if not allow_empty_slab_rebar:
+            st.stop()
         gross_area=slab_w*slab_l*slab_qty; net_area=max(0.0,gross_area-slab_openings)
         net_concrete=net_area*slab_h;vol=with_waste(net_concrete,waste_concrete)
         net_form=net_area if "พื้นยก" in slab_support else 0.0;form=with_waste(net_form,waste_formwork)
