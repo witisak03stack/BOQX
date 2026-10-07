@@ -24,7 +24,7 @@ except ImportError:
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ — Drawing Reader V4",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ Reliability + Drawing Reader",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -298,13 +298,11 @@ STRUCTURAL_DASH_MARK_RE = re.compile(r"(?<![A-Za-z0-9])([FCBWRD]\s*[-.]\s*\d+[A-
 DIM_RE = re.compile(r"(?<![A-Za-z0-9])([0-9]+(?:[.,][0-9]+)?)\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?)(?:\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?))?", re.I)
 DIM_UNIT_RE = re.compile(r"(?<![A-Za-z0-9])([0-9]+(?:[.,][0-9]+)?)\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?)(?:\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?))?\s*(mm|cm|m|เมตร)\b", re.I)
 REBAR_COUNT_PATTERNS = [
-    re.compile(r"(?<![A-Za-z0-9])([0-9]{1,3})\s*[-x×]?\s*(DB\s*\d+|RB\s*\d+|#\s*\d+)\b", re.I),
-    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+|#\s*\d+)\s*[-x×]?\s*([0-9]{1,3})\s*(?:เส้น|bars?|ea)?\b", re.I),
-    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+|#\s*\d+)\s*จำนวน\s*([0-9]{1,3})\b", re.I),
-    # OCR แบบมักอ่าน DB12 เป็น 0-012 / 4-012 / 4-Ø12
-    re.compile(r"(?<![A-Za-z0-9])([0-9]{1,3})\s*[-–—]\s*[ØO0]?\s*(\d{1,2})\b", re.I),
+    re.compile(r"(?<![A-Za-z0-9])([0-9]{1,3})\s*[-x×]?\s*(DB\s*\d+|RB\s*\d+)\b", re.I),
+    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+)\s*[-x×]?\s*([0-9]{1,3})\s*(?:เส้น|bars?|ea)?\b", re.I),
+    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+)\s*จำนวน\s*([0-9]{1,3})\b", re.I),
 ]
-REBAR_SPACING_RE = re.compile(r"(?:(?:DB|RB)\s*\d+|D\s*\d+|#\s*\d+|STR\s*[:.]?\s*#?\s*\d+)\s*@\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m)?", re.I)
+REBAR_SPACING_RE = re.compile(r"\b(DB\s*\d+|RB\s*\d+|D\s*\d+)\s*@\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m)?", re.I)
 LENGTH_RE = re.compile(r"(?:\bL\b|ยาว|length|span)\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m|เมตร)?", re.I)
 HEIGHT_RE = re.compile(r"(?:\bH\b|สูง|height|ลึก|หนา|th)\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m|เมตร)?", re.I)
 QTY_RE = re.compile(r"(?:จำนวน|qty|quantity|no\.?|nos\.?)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)", re.I)
@@ -365,16 +363,7 @@ def spacing_to_m(value, unit=None):
 
 def normalize_rebar_type(raw):
     x = re.sub(r"\s+", "", str(raw or "").upper())
-    x = x.replace("Ø", "#")
-    if x.startswith("#"):
-        x = "DB" + x[1:]
-    elif x.startswith("STR#") or x.startswith("STR:") or x.startswith("STR."):
-        x = re.sub(r"^STR[:.]?#?", "", x)
-        x = "DB" + x
-    elif x.startswith("D") and not x.startswith("DB"):
-        x = "DB" + x[1:]
-    # OCR ชอบอ่าน O/0 แทน Ø ในสเปกเหล็ก
-    x = re.sub(r"^DB[O0](\d+)$", r"DB\1", x)
+    x = x.replace("D", "DB", 1) if x.startswith("D") and not x.startswith("DB") else x
     return x if x in REBAR_WEIGHT else None
 
 def infer_rebar_position(text, start, end):
@@ -413,40 +402,27 @@ def infer_rebar_position(text, start, end):
 
 
 def parse_rebar_specs(context):
-    """อ่านเหล็กเสริมจากข้อความ OCR/PDF โดยรองรับ DB/RB/#/STR และรูปแบบ OCR ที่พบบ่อย"""
     rows = []
     seen = set()
     text = normalize_drawing_text(context)
 
-    # @ spacing: groups changed, so group(1)=spacing, group(2)=unit
     for m in REBAR_SPACING_RE.finditer(text):
-        raw = m.group(0)
-        # หาเบอร์เหล็กจากข้อความก่อน @
-        before = raw.split("@", 1)[0]
-        nums = re.findall(r"(?:DB|RB|D|#|STR[:.]?)\s*#?\s*(\d{1,2})", before, re.I)
-        if not nums:
-            continue
-        rtype = normalize_rebar_type("#" + nums[-1])
+        rtype = normalize_rebar_type(m.group(1))
         if not rtype:
             continue
-        spacing = spacing_to_m(m.group(1), m.group(2))
+        spacing = spacing_to_m(m.group(2), m.group(3))
         pos = infer_rebar_position(text, m.start(), m.end())
         key = (rtype, "spacing", round(spacing, 6), pos)
         if key not in seen and spacing > 0:
-            rows.append({"pos": pos, "type": rtype, "mode": "ระยะห่าง (@ ม.)",
-                         "val": spacing, "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
+            rows.append({"pos": pos, "type": rtype, "mode": "ระยะห่าง (@ ม.)", "val": spacing, "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
             seen.add(key)
 
     for pattern_index, pat in enumerate(REBAR_COUNT_PATTERNS):
         for m in pat.finditer(text):
             if pattern_index == 0:
                 count_raw, type_raw = m.group(1), m.group(2)
-            elif pattern_index in (1, 2):
-                type_raw, count_raw = m.group(1), m.group(2)
             else:
-                # รูปแบบ OCR เช่น 4-012 = 4 เส้น DB12
-                count_raw, dia_raw = m.group(1), m.group(2)
-                type_raw = "#" + dia_raw
+                type_raw, count_raw = m.group(1), m.group(2)
             rtype = normalize_rebar_type(type_raw)
             if not rtype:
                 continue
@@ -454,10 +430,8 @@ def parse_rebar_specs(context):
             pos = infer_rebar_position(text, m.start(), m.end())
             key = (rtype, "count", count, pos)
             if key not in seen:
-                rows.append({"pos": pos, "type": rtype, "mode": "จำนวน (เส้น)",
-                             "val": float(count), "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
+                rows.append({"pos": pos, "type": rtype, "mode": "จำนวน (เส้น)", "val": float(count), "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
                 seen.add(key)
-
     return rows
 
 def dimension_values_to_m(values, target, unit=None):
@@ -696,204 +670,52 @@ def drawing_text_quality_score(text):
     return marks*5 + rebars*4 + dims*2 + min(len(compact),3000)/10000.0
 
 
-def ocr_image_to_blocks(img, lang="tha+eng", psm=11):
-    """OCR แบบมีพิกัด: รวมคำที่อยู่ในบรรทัดเดียวเป็น pseudo-block เพื่อให้ parser ใช้ตำแหน่งจริงได้"""
-    if pytesseract is None or Image is None:
-        return [], ""
-    try:
-        from pytesseract import Output
-        data = pytesseract.image_to_data(
-            img, lang=lang, config=f"--psm {psm}", output_type=Output.DICT
-        )
-    except Exception:
-        return [], ""
-
-    groups = {}
-    words = []
-    n = len(data.get("text", []))
-    for i in range(n):
-        txt = str(data["text"][i] or "").strip()
-        if not txt:
-            continue
-        try:
-            conf = float(data["conf"][i])
-        except Exception:
-            conf = -1
-        if conf < 8:
-            continue
-        x, y = int(data["left"][i]), int(data["top"][i])
-        w, h = int(data["width"][i]), int(data["height"][i])
-        key = (
-            data.get("block_num", [0]*n)[i],
-            data.get("par_num", [0]*n)[i],
-            data.get("line_num", [0]*n)[i],
-        )
-        groups.setdefault(key, []).append((x, y, w, h, txt, conf))
-        words.append((y, x, txt))
-
-    blocks = []
-    for _, items in groups.items():
-        items.sort(key=lambda z: z[0])
-        x0 = min(z[0] for z in items); y0 = min(z[1] for z in items)
-        x1 = max(z[0] + z[2] for z in items); y1 = max(z[1] + z[3] for z in items)
-        text = " ".join(z[4] for z in items)
-        blocks.append((x0, y0, x1, y1, text, 0, 0, 0))
-    blocks.sort(key=lambda b: (b[1], b[0]))
-
-    words.sort(key=lambda z: (z[0], z[1]))
-    text = "\n".join(t for _, _, t in words)
-    return blocks, normalize_drawing_text(text)
-
-
-def merge_drawing_candidates(candidates):
-    """รวม candidate ที่เป็นรหัสเดียวกันในหน้าเดียวกัน แต่เก็บตำแหน่ง/หลักฐานทั้งหมดไว้"""
-    grouped = {}
-    for c in candidates:
-        key = (int(c.get("page", 0)), str(c.get("mark", "")).upper(), str(c.get("target", "")))
-        grouped.setdefault(key, []).append(c)
-
-    out = []
-    for key, group in grouped.items():
-        # เลือกตัวที่มีหลักฐานมากที่สุดเป็นฐาน
-        base = max(group, key=lambda c: (
-            sum(bool(v) for v in c.get("evidence", {}).values()),
-            c.get("confidence", 0),
-            len(c.get("rebar_rows", [])),
-            len(c.get("steel_profiles", []))
-        ))
-        merged = copy.deepcopy(base)
-        merged["occurrences"] = len(group)
-        merged["locations"] = [g.get("location_key", "") for g in group]
-
-        # ถ้ามีจำนวนที่อ่านจากแบบจริง ให้ใช้ค่านั้น; ถ้าไม่มี ให้จำนวน = จำนวนสัญลักษณ์ที่พบ
-        explicit_qty = [safe_num(g.get("qty", 0)) for g in group if g.get("evidence", {}).get("จำนวน")]
-        if explicit_qty:
-            merged["qty"] = max(explicit_qty)
-        else:
-            merged["qty"] = float(len(group))
-
-        # รวมหลักฐานที่พบจากทุก occurrence
-        for field in ("width_m", "length_m", "height_m", "member_length_m", "area_m2"):
-            vals = [safe_num(g.get(field, 0)) for g in group if safe_num(g.get(field, 0)) > 0]
-            if vals:
-                # ใช้ค่าที่เกิดซ้ำ/ค่าที่น่าเชื่อถือที่สุด; สำหรับมิติใช้ค่าฐานที่พบครั้งแรก
-                merged[field] = round(vals[0], 4)
-
-        merged_rebar = []
-        seen_rb = set()
-        for g in group:
-            for r in g.get("rebar_rows", []):
-                k = (r.get("pos"), r.get("type"), r.get("mode"), round(safe_num(r.get("val")), 6))
-                if k not in seen_rb:
-                    merged_rebar.append(copy.deepcopy(r)); seen_rb.add(k)
-        merged["rebar_rows"] = merged_rebar
-
-        merged_steel = []
-        for g in group:
-            for s in g.get("steel_profiles", []):
-                if s not in merged_steel:
-                    merged_steel.append(s)
-        merged["steel_profiles"] = merged_steel
-
-        merged["evidence"] = {
-            k: any(bool(g.get("evidence", {}).get(k)) for g in group)
-            for k in ("ขนาด", "ความยาว/สูง", "จำนวน", "เหล็ก", "โครงเหล็ก")
-        }
-        merged["source"] = " ; ".join(dict.fromkeys(str(g.get("source", "")) for g in group if g.get("source")))
-        # รวมข้อความไว้ตรวจย้อนหลัง แต่จำกัดความยาว
-        merged["source_text"] = "\n--- occurrence ---\n".join(
-            str(g.get("source_text", ""))[:700] for g in group
-        )[:3000]
-        merged["confidence"] = round(min(0.94, max(g.get("confidence", 0) for g in group) + (0.04 if len(group) > 1 else 0)), 2)
-        merged["needs_review"] = True
-        out.append(merged)
-
-    return sorted(out, key=lambda c: (c.get("page", 0), c.get("mark", ""), c.get("target", "")))
-
-
 def read_drawing_pdf(file_bytes, use_ocr=True, max_pages=80, dpi=160):
-    """อ่าน PDF แบบโครงสร้าง โดยใช้ native text ถ้ามี และ spatial OCR สำหรับ PDF สแกน"""
     if fitz is None:
         raise RuntimeError("ยังไม่มี PyMuPDF (fitz) สำหรับอ่าน PDF")
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    page_texts = []
-    page_blocks = []
-    ocr_pages = []
-    ocr_languages = []
-
-    for idx in range(min(len(doc), int(max_pages))):
-        page = doc.load_page(idx)
-        native_text = normalize_drawing_text(page.get_text("text", sort=True) or "")
+    doc=fitz.open(stream=file_bytes,filetype="pdf")
+    page_texts=[]; page_blocks=[]; ocr_pages=[]; ocr_languages=[]
+    for idx in range(min(len(doc),int(max_pages))):
+        page=doc.load_page(idx)
+        native_text=normalize_drawing_text(page.get_text("text",sort=True) or "")
         try:
-            blocks = page.get_text("blocks", sort=True)
+            blocks=page.get_text("blocks",sort=True)
         except Exception:
-            blocks = []
-
-        text = native_text
-        # PDF สแกนของแบบก่อสร้างมักมี native text = 0 ตัวอักษร
-        should_ocr = use_ocr and pytesseract is not None and Image is not None and (
-            len(re.sub(r"\s+", "", native_text)) < 80 or
-            drawing_text_quality_score(native_text) < 10
+            blocks=[]
+        text=native_text
+        should_ocr=use_ocr and pytesseract is not None and Image is not None and (
+            len(re.sub(r"\s+","",native_text))<40 or drawing_text_quality_score(native_text)<8
         )
-
         if should_ocr:
             try:
-                scale = max(1.0, dpi / 72.0)
-                pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-                try:
-                    langs = pytesseract.get_languages(config="")
-                except Exception:
-                    langs = []
-                lang = "tha+eng" if "tha" in langs and "eng" in langs else ("tha" if "tha" in langs else "eng")
+                scale=max(1.0,dpi/72.0); pix=page.get_pixmap(matrix=fitz.Matrix(scale,scale),alpha=False)
+                img=Image.frombytes("RGB",[pix.width,pix.height],pix.samples)
+                try: langs=pytesseract.get_languages(config="")
+                except Exception: langs=[]
+                lang="tha+eng" if "tha" in langs and "eng" in langs else ("tha" if "tha" in langs else "eng")
                 ocr_languages.append(lang)
-
-                # Spatial OCR เป็นหลัก
-                ocr_blocks, ocr_text = ocr_image_to_blocks(img, lang=lang, psm=11)
-
-                # ถ้า OCR ไม่เจอรหัสโครงสร้างเลย ลอง PSM 6 ซึ่งเหมาะกับแบบที่เป็นกล่อง/รายละเอียด
-                has_structural_mark = bool(STRUCTURAL_MARK_RE.search(ocr_text) or STRUCTURAL_DASH_MARK_RE.search(ocr_text))
-                if len(re.sub(r"\s+", "", ocr_text)) < 40 or not has_structural_mark:
-                    retry_blocks, retry_text = ocr_image_to_blocks(img, lang=lang, psm=6)
-                    if drawing_text_quality_score(retry_text) > drawing_text_quality_score(ocr_text):
-                        ocr_blocks, ocr_text = retry_blocks, retry_text
-
-                if drawing_text_quality_score(ocr_text) >= drawing_text_quality_score(native_text):
-                    text = ocr_text
-                    # ใช้บล็อก OCR ที่มีพิกัดแทน native blocks ที่ว่างจาก PDF สแกน
-                    blocks = ocr_blocks if ocr_blocks else blocks
-
-                ocr_pages.append(idx + 1)
+                ocr_text=normalize_drawing_text(pytesseract.image_to_string(img,lang=lang,config="--psm 11"))
+                if drawing_text_quality_score(ocr_text)<drawing_text_quality_score(native_text):
+                    retry=normalize_drawing_text(pytesseract.image_to_string(img,lang=lang,config="--psm 6"))
+                    if drawing_text_quality_score(retry)>drawing_text_quality_score(ocr_text): ocr_text=retry
+                if drawing_text_quality_score(ocr_text)>drawing_text_quality_score(native_text): text=ocr_text
+                elif native_text.strip(): text=native_text
+                else: text=ocr_text
+                ocr_pages.append(idx+1)
             except Exception:
-                # ถ้า OCR ล้มเหลว ให้กลับไปใช้ native text
                 pass
-
-        page_texts.append(text)
-        page_blocks.append(blocks)
-
-    candidates = []
-    for page_no, (text, blocks) in enumerate(zip(page_texts, page_blocks), start=1):
+        page_texts.append(text);page_blocks.append(blocks)
+    candidates=[]
+    for page_no,(text,blocks) in enumerate(zip(page_texts,page_blocks),start=1):
         if not text.strip():
             continue
-        candidates.extend(
-            parse_drawing_candidates(text, page_no, blocks=blocks if blocks else None)
-        )
-
-    # รวม C1/C1 ฯลฯ ที่เป็นรหัสเดียวกันในหน้าเดียวกัน
-    candidates = merge_drawing_candidates(candidates)
-
-    page_count = len(doc)
-    doc.close()
-    return {
-        "page_count": page_count,
-        "pages_read": len(page_texts),
-        "ocr_pages": ocr_pages,
-        "ocr_languages": list(dict.fromkeys(ocr_languages)),
-        "ocr_available": pytesseract is not None and Image is not None,
-        "candidates": candidates,
-        "reader_mode": "Native PDF + Spatial OCR (ตำแหน่งข้อความ) + grouping รหัสซ้ำ",
-    }
+        # ใช้ทั้ง spatial blocks และข้อความทั้งหน้า แล้วคัดตัวที่มีหลักฐานมากกว่า
+        if blocks:
+            candidates.extend(parse_drawing_candidates(text,page_no,blocks=blocks))
+        else:
+            candidates.extend(parse_drawing_candidates(text,page_no,blocks=None))
+    page_count=len(doc);doc.close()
+    return {"page_count":page_count,"pages_read":len(page_texts),"ocr_pages":ocr_pages,"ocr_languages":list(dict.fromkeys(ocr_languages)),"ocr_available":pytesseract is not None and Image is not None,"candidates":candidates,"reader_mode":"ข้อความใน PDF + OCR เฉพาะหน้าที่จำเป็น"}
 
 def candidate_summary(c):
     dims = ""
@@ -905,11 +727,7 @@ def candidate_summary(c):
         dims = f"ยาว {c['member_length_m']:.2f} ม."
     elif c.get("area_m2"):
         dims = f"พื้นที่ {c['area_m2']:.2f} ตร.ม."
-    rb = ", ".join(
-        (f"{r['val']:.0f} {r['type']}" if r["mode"].startswith("จำนวน")
-         else f"{r['type']} @{r['val']*1000:.0f} มม.")
-        for r in c.get("rebar_rows", [])
-    )
+    rb = ", ".join((f"{r['val']:.0f} {r['type']}" if r["mode"].startswith("จำนวน") else f"{r['type']} @{r['val']:.2f} ม.") for r in c.get("rebar_rows", []))
     steel = ", ".join(c.get("steel_profiles", []))
     return dims or "ยังอ่านขนาดไม่ได้", rb or "ยังอ่านเหล็กไม่ได้", steel or "ยังไม่พบหน้าตัดโครงเหล็ก"
 
@@ -1796,8 +1614,6 @@ with tabs[0]:
     if result:
         if result.get("ocr_pages"):
             st.caption("OCR ใช้ในหน้า: " + ", ".join(str(x) for x in result["ocr_pages"]))
-        if result.get("reader_mode"):
-            st.caption("โหมดอ่าน: " + str(result["reader_mode"]))
         if result.get("ocr_available") is False and use_ocr:
             st.warning("เครื่องนี้ยังไม่มี Tesseract/Pillow ที่พร้อมใช้ — อ่านได้เฉพาะข้อความที่ฝังอยู่ใน PDF")
         if not candidates:
@@ -1813,10 +1629,7 @@ with tabs[0]:
                 if c.get("target") in ("ฐานราก","เสา","คาน","พื้น") and not evidence.get("เหล็ก"): missing.append("เหล็ก")
                 conf="ข้อมูลค่อนข้างครบ" if c["confidence"]>=0.8 else ("ข้อมูลบางส่วน" if c["confidence"]>=0.65 else "ต้องตรวจมาก")
                 review="ต้องตรวจ — " + ", ".join(missing) if missing else "ต้องตรวจเทียบแบบ"
-                rows.append({"#":idx+1,"หน้า":c["page"],"รหัส":c["mark"],"ไปที่":c["target"],
-                             "จำนวนที่พบ":int(round(c.get("qty",1))),
-                             "ขนาด/ความยาว":dims,"เหล็กที่อ่านได้":rb,"โครงเหล็กที่อ่านได้":steel,
-                             "ระดับข้อมูลที่อ่านได้":conf,"สถานะ":review})
+                rows.append({"#":idx+1,"หน้า":c["page"],"รหัส":c["mark"],"ไปที่":c["target"],"ขนาด/ความยาว":dims,"เหล็กที่อ่านได้":rb,"โครงเหล็กที่อ่านได้":steel,"ระดับข้อมูลที่อ่านได้":conf,"สถานะ":review})
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             options=[f"#{i+1} | หน้า {c['page']} | {c['mark']} → {c['target']}" for i,c in enumerate(candidates)]
             sel=st.selectbox("เลือกรายการจากแบบที่ต้องการนำไปใช้", options, key="drawing_candidate_select")
