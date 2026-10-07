@@ -24,7 +24,7 @@ except ImportError:
 # 1. Page Configuration & Custom CSS
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ Reliability + Drawing Reader",
+    page_title="AI ถอด BOQ งานโครงสร้าง & สถาปัตย์ — Drawing Reader V6",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -222,7 +222,10 @@ def find_near_duplicate_items(item_data):
             hits.append(existing)
     return hits
 
-CURRENT_REBAR_PRICES = {}
+CURRENT_REBAR_PRICES = {
+    "RB6":22.36, "RB9":21.32, "DB10":21.00, "DB12":20.65,
+    "DB16":20.54, "DB20":20.77, "DB25":21.00, "DB28":21.00, "DB32":21.00
+}
 
 def get_rebar_price(rebar_type, db_price, rb_price):
     """คืนราคาต่อกก. ตามชนิดเหล็ก โดยใช้ราคาที่ตั้งแยกตามขนาดก่อน ถ้าไม่มีจึงใช้ราคา fallback"""
@@ -298,11 +301,13 @@ STRUCTURAL_DASH_MARK_RE = re.compile(r"(?<![A-Za-z0-9])([FCBWRD]\s*[-.]\s*\d+[A-
 DIM_RE = re.compile(r"(?<![A-Za-z0-9])([0-9]+(?:[.,][0-9]+)?)\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?)(?:\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?))?", re.I)
 DIM_UNIT_RE = re.compile(r"(?<![A-Za-z0-9])([0-9]+(?:[.,][0-9]+)?)\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?)(?:\s*[x*]\s*([0-9]+(?:[.,][0-9]+)?))?\s*(mm|cm|m|เมตร)\b", re.I)
 REBAR_COUNT_PATTERNS = [
-    re.compile(r"(?<![A-Za-z0-9])([0-9]{1,3})\s*[-x×]?\s*(DB\s*\d+|RB\s*\d+)\b", re.I),
-    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+)\s*[-x×]?\s*([0-9]{1,3})\s*(?:เส้น|bars?|ea)?\b", re.I),
-    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+)\s*จำนวน\s*([0-9]{1,3})\b", re.I),
+    re.compile(r"(?<![A-Za-z0-9])([0-9]{1,3})\s*[-x×]?\s*(DB\s*\d+|RB\s*\d+|#\s*\d+)\b", re.I),
+    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+|#\s*\d+)\s*[-x×]?\s*([0-9]{1,3})\s*(?:เส้น|bars?|ea)?\b", re.I),
+    re.compile(r"(?<![A-Za-z0-9])(DB\s*\d+|RB\s*\d+|#\s*\d+)\s*จำนวน\s*([0-9]{1,3})\b", re.I),
+    # OCR แบบมักอ่าน Ø/# เป็น 0, O, 8 หรือทำให้เกิดรูปแบบ 4-012 / 2-09
+    re.compile(r"(?<![A-Za-z0-9])([0-9]{1,3})\s*[-–—]\s*[#ØΦOo08B]?\s*(\d{1,2})\b", re.I),
 ]
-REBAR_SPACING_RE = re.compile(r"\b(DB\s*\d+|RB\s*\d+|D\s*\d+)\s*@\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m)?", re.I)
+REBAR_SPACING_RE = re.compile(r"(?:(?:DB|RB)\s*\d+|D\s*\d+|#\s*\d+|STR\s*[:.]?\s*#?\s*\d+|STR\s*[89]?6)\s*@\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m)?", re.I)
 LENGTH_RE = re.compile(r"(?:\bL\b|ยาว|length|span)\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m|เมตร)?", re.I)
 HEIGHT_RE = re.compile(r"(?:\bH\b|สูง|height|ลึก|หนา|th)\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m|เมตร)?", re.I)
 QTY_RE = re.compile(r"(?:จำนวน|qty|quantity|no\.?|nos\.?)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)", re.I)
@@ -314,11 +319,19 @@ STEEL_PROFILE_RE = re.compile(r"\b(?:H|C|Tube|RHS|SHS|Angle|L)\s*[-]?\s*[0-9]+(?
 
 def normalize_drawing_text(text):
     text = str(text or "").replace("\u00a0", " ")
+    # OCR แบบไทย/อังกฤษมักสลับเลขไทยกับเลขอารบิก
+    thai_digits = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+    text = text.translate(thai_digits)
     text = text.replace("×", "x").replace("✕", "x").replace("−", "-").replace("–", "-").replace("—", "-")
-    # OCR มักอ่านเลข 1 ในรหัสสมาชิก เช่น F1/C1/B1 เป็นตัว l
-    # แก้เฉพาะรูปแบบรหัสสั้น ๆ เพื่อไม่กระทบคำทั่วไป
-    text = re.sub(r"(?<![A-Za-z0-9])([FCBSWRD])\s*l\b", r"\g<1>1", text, flags=re.I)
-    text = re.sub(r"(?<![A-Za-z0-9])([FCBWRD])\s*[-.]\s*[Il]\b", r"\g<1>-1", text, flags=re.I)
+    text = text.replace("Ø", "#").replace("ø", "#").replace("Φ", "#").replace("φ", "#")
+    # OCR มักอ่านเลข 1 ในรหัสสมาชิก เช่น F1/C1/B1 เป็นตัว l/I
+    text = re.sub(r"(?<![A-Za-z0-9])([FCBSWRD])\s*[lI|]\b", r"\g<1>1", text, flags=re.I)
+    text = re.sub(r"(?<![A-Za-z0-9])([FCBWRD])\s*[-.]\s*[Il|]\b", r"\g<1>-1", text, flags=re.I)
+    # รูปแบบที่พบบ่อยในแบบ: STR86 / STR:96 → STR#6
+    text = re.sub(r"\bSTR\s*[:.]?\s*[89]6\b", "STR#6", text, flags=re.I)
+    text = re.sub(r"\bSTR\s*[:.]?\s*6\b", "STR#6", text, flags=re.I)
+    # กัน OCR ที่เว้นวรรคแปลก ๆ รอบเครื่องหมาย #
+    text = re.sub(r"STR\s*[:.]\s*#?\s*(\d+)", r"STR#\1", text, flags=re.I)
     text = re.sub(r"[ \t]+", " ", text)
     return text
 
@@ -363,7 +376,15 @@ def spacing_to_m(value, unit=None):
 
 def normalize_rebar_type(raw):
     x = re.sub(r"\s+", "", str(raw or "").upper())
-    x = x.replace("D", "DB", 1) if x.startswith("D") and not x.startswith("DB") else x
+    x = x.replace("Ø", "#").replace("O", "0")
+    if x.startswith("#"):
+        x = "DB" + x[1:]
+    elif x.startswith("STR#") or x.startswith("STR:") or x.startswith("STR."):
+        x = re.sub(r"^STR[:.]?#?", "", x)
+        x = "DB" + x
+    elif x.startswith("D") and not x.startswith("DB"):
+        x = "DB" + x[1:]
+    x = re.sub(r"^DB0?(\d+)$", r"DB\1", x)
     return x if x in REBAR_WEIGHT else None
 
 def infer_rebar_position(text, start, end):
@@ -402,27 +423,40 @@ def infer_rebar_position(text, start, end):
 
 
 def parse_rebar_specs(context):
+    """อ่านเหล็กเสริมจากข้อความ OCR/PDF โดยรองรับ DB/RB/#/STR และรูปแบบ OCR ที่พบบ่อย"""
     rows = []
     seen = set()
     text = normalize_drawing_text(context)
 
+    # @ spacing: groups changed, so group(1)=spacing, group(2)=unit
     for m in REBAR_SPACING_RE.finditer(text):
-        rtype = normalize_rebar_type(m.group(1))
+        raw = m.group(0)
+        # หาเบอร์เหล็กจากข้อความก่อน @
+        before = raw.split("@", 1)[0]
+        nums = re.findall(r"(?:DB|RB|D|#|STR[:.]?)\s*#?\s*(\d{1,2})", before, re.I)
+        if not nums:
+            continue
+        rtype = normalize_rebar_type("#" + nums[-1])
         if not rtype:
             continue
-        spacing = spacing_to_m(m.group(2), m.group(3))
+        spacing = spacing_to_m(m.group(1), m.group(2))
         pos = infer_rebar_position(text, m.start(), m.end())
         key = (rtype, "spacing", round(spacing, 6), pos)
         if key not in seen and spacing > 0:
-            rows.append({"pos": pos, "type": rtype, "mode": "ระยะห่าง (@ ม.)", "val": spacing, "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
+            rows.append({"pos": pos, "type": rtype, "mode": "ระยะห่าง (@ ม.)",
+                         "val": spacing, "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
             seen.add(key)
 
     for pattern_index, pat in enumerate(REBAR_COUNT_PATTERNS):
         for m in pat.finditer(text):
             if pattern_index == 0:
                 count_raw, type_raw = m.group(1), m.group(2)
-            else:
+            elif pattern_index in (1, 2):
                 type_raw, count_raw = m.group(1), m.group(2)
+            else:
+                # รูปแบบ OCR เช่น 4-012 = 4 เส้น DB12
+                count_raw, dia_raw = m.group(1), m.group(2)
+                type_raw = "#" + dia_raw
             rtype = normalize_rebar_type(type_raw)
             if not rtype:
                 continue
@@ -430,8 +464,10 @@ def parse_rebar_specs(context):
             pos = infer_rebar_position(text, m.start(), m.end())
             key = (rtype, "count", count, pos)
             if key not in seen:
-                rows.append({"pos": pos, "type": rtype, "mode": "จำนวน (เส้น)", "val": float(count), "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
+                rows.append({"pos": pos, "type": rtype, "mode": "จำนวน (เส้น)",
+                             "val": float(count), "len": 0.0, "lap_mode": "ไม่มี", "lap_ends": 0})
                 seen.add(key)
+
     return rows
 
 def dimension_values_to_m(values, target, unit=None):
@@ -562,19 +598,21 @@ def _candidate_from_context(mark_match, context, page_no, surrounding_context=""
 
 
 def _block_nearby_texts(blocks, idx):
+    """หา text ที่อยู่ใกล้กันใน 2 มิติ โดยรองรับข้อความที่วางเหนือ/ใต้กันใน detail"""
     x0,y0,x1,y1,*_=blocks[idx]
     cx=(x0+x1)/2; cy=(y0+y1)/2
     scored=[]
     for j,b in enumerate(blocks):
         if j==idx or len(b)<5: continue
         bx0,by0,bx1,by1,*_=b; bcx=(bx0+bx1)/2; bcy=(by0+by1)/2
+        dx=abs(bcx-cx); dy=abs(bcy-cy)
         x_overlap=max(0,min(x1,bx1)-max(x0,bx0)); y_overlap=max(0,min(y1,by1)-max(y0,by0))
-        dist=((bcx-cx)**2+(bcy-cy)**2)**0.5
-        related=(x_overlap>0 and abs(bcy-cy)<180) or (y_overlap>0 and abs(bcx-cx)<180)
-        if related and dist<320:
-            scored.append((dist,str(b[4] or "")))
-    scored.sort(key=lambda x:x[0])
-    return str(blocks[idx][4] or ""), [t for _,t in scored[:3] if t]
+        dist=(dx*dx+dy*dy)**0.5
+        related=(x_overlap>0 and dy<360) or (y_overlap>0 and dx<360) or ((dx<420 or dy<420) and dist<480)
+        if related and dist<520:
+            scored.append((dist,dx,dy,str(b[4] or "")))
+    scored.sort(key=lambda x:(x[0], x[1]+x[2]))
+    return str(blocks[idx][4] or ""), [t for _,_,_,t in scored[:8] if t]
 
 
 def parse_drawing_candidates(page_text, page_no, blocks=None):
@@ -608,6 +646,7 @@ def parse_drawing_candidates(page_text, page_no, blocks=None):
                 c=_candidate_from_context(local_match,ctx,page_no,ctx)
                 if c:
                     c["location_key"]=f"{page_no}:{i}:{round(float(b[0]),1)}:{round(float(b[1]),1)}:{mi}"
+                    c["bbox"]=(float(b[0]),float(b[1]),float(b[2]),float(b[3]))
                     candidates.append(c)
     # ใช้ parser ทั้งหน้าเฉพาะกับรหัสที่ยังไม่พบจาก block เพื่อหลีกเลี่ยง candidate ซ้ำและ context ปนกัน
     block_marks={c.get("mark") for c in candidates if c.get("location_key","").startswith(f"{page_no}:") and ":full:" not in c.get("location_key","")}
@@ -670,52 +709,294 @@ def drawing_text_quality_score(text):
     return marks*5 + rebars*4 + dims*2 + min(len(compact),3000)/10000.0
 
 
+def ocr_image_to_blocks(img, lang="tha+eng", psm=11):
+    """OCR แบบมีพิกัด: รวมคำที่อยู่ในบรรทัดเดียวเป็น pseudo-block เพื่อให้ parser ใช้ตำแหน่งจริงได้"""
+    if pytesseract is None or Image is None:
+        return [], ""
+    try:
+        from pytesseract import Output
+        data = pytesseract.image_to_data(
+            img, lang=lang, config=f"--psm {psm}", output_type=Output.DICT
+        )
+    except Exception:
+        return [], ""
+
+    groups = {}
+    words = []
+    n = len(data.get("text", []))
+    for i in range(n):
+        txt = str(data["text"][i] or "").strip()
+        if not txt:
+            continue
+        try:
+            conf = float(data["conf"][i])
+        except Exception:
+            conf = -1
+        # เก็บ token ที่ดูเป็นข้อมูลแบบ แม้ OCR confidence ต่ำ เพราะสัญลักษณ์ #/Ø/STR มักได้คะแนนต่ำ
+        engineering_token = bool(re.search(r"(?:\b(?:DB|RB|STR|C|B|F|S|R|W)\s*[-:#.]?\s*\d|#\s*\d|@\s*\d|\d+(?:[-x×]\d+){1,2})", txt, re.I))
+        if conf < 8 and not engineering_token:
+            continue
+        x, y = int(data["left"][i]), int(data["top"][i])
+        w, h = int(data["width"][i]), int(data["height"][i])
+        key = (
+            data.get("block_num", [0]*n)[i],
+            data.get("par_num", [0]*n)[i],
+            data.get("line_num", [0]*n)[i],
+        )
+        groups.setdefault(key, []).append((x, y, w, h, txt, conf))
+        words.append((y, x, txt))
+
+    blocks = []
+    for _, items in groups.items():
+        items.sort(key=lambda z: z[0])
+        x0 = min(z[0] for z in items); y0 = min(z[1] for z in items)
+        x1 = max(z[0] + z[2] for z in items); y1 = max(z[1] + z[3] for z in items)
+        text = " ".join(z[4] for z in items)
+        blocks.append((x0, y0, x1, y1, text, 0, 0, 0))
+    blocks.sort(key=lambda b: (b[1], b[0]))
+
+    words.sort(key=lambda z: (z[0], z[1]))
+    text = "\n".join(t for _, _, t in words)
+    return blocks, normalize_drawing_text(text)
+
+
+def _ocr_local_context(img, bbox, lang="tha+eng"):
+    """OCR ซ้ำเฉพาะบริเวณรอบรหัสสมาชิก เพื่อดึงมิติ/เหล็กที่อยู่นอกบรรทัดเดียวกัน"""
+    if img is None or bbox is None or pytesseract is None:
+        return ""
+    try:
+        x0,y0,x1,y1 = [int(v) for v in bbox]
+        pad_x = max(260, int((x1-x0)*4.5))
+        pad_y = max(320, int((y1-y0)*8.0))
+        left=max(0,x0-pad_x); top=max(0,y0-pad_y); right=min(img.width,x1+pad_x); bottom=min(img.height,y1+pad_y)
+        crop=img.crop((left,top,right,bottom))
+        # ขยายเล็กน้อยก่อน OCR เพื่อช่วยตัวเลขและสัญลักษณ์เล็ก ๆ
+        scale=1.5
+        crop=crop.resize((max(1,int(crop.width*scale)), max(1,int(crop.height*scale))))
+        txt=pytesseract.image_to_string(crop,lang=lang,config="--oem 1 --psm 11")
+        return normalize_drawing_text(txt)
+    except Exception:
+        return ""
+
+
+def merge_drawing_candidates(candidates):
+    """รวมรหัสเดียวกันข้ามหน้าเพื่อให้ข้อมูลมิติ/เหล็กไม่กระจาย แต่ไม่ถือจำนวนครั้งที่พบ = จำนวนสมาชิกจริง"""
+    grouped = {}
+    for c in candidates:
+        key = (str(c.get("mark", "")).upper(), str(c.get("target", "")))
+        grouped.setdefault(key, []).append(c)
+
+    out = []
+    for key, group in grouped.items():
+        base = max(group, key=lambda c: (
+            sum(bool(v) for v in c.get("evidence", {}).values()),
+            c.get("confidence", 0),
+            len(c.get("rebar_rows", [])),
+            len(c.get("steel_profiles", []))
+        ))
+        merged = copy.deepcopy(base)
+        merged["occurrences"] = len(group)
+        merged["pages"] = list(dict.fromkeys(int(g.get("page",0)) for g in group if g.get("page")))
+        merged["locations"] = [g.get("location_key", "") for g in group]
+
+        explicit_qty = [safe_num(g.get("qty", 0)) for g in group if g.get("evidence", {}).get("จำนวน") and safe_num(g.get("qty",0))>0]
+        explicit_qty_unique=[]
+        for q in explicit_qty:
+            if not any(abs(q-u) < 1e-6 for u in explicit_qty_unique):
+                explicit_qty_unique.append(q)
+        merged["qty"] = max(explicit_qty_unique) if explicit_qty_unique else 1.0
+        merged["qty_is_explicit"] = bool(explicit_qty_unique)
+
+        # รวมมิติ: ใช้ค่าที่มีและถ้ามีหลายค่าต่างกัน ให้ทำเครื่องหมายว่าต้องตรวจ
+        conflicts=[]
+        if len(explicit_qty_unique) > 1:
+            conflicts.append("จำนวนที่อ่านได้ไม่ตรงกัน: " + ", ".join(f"{q:g}" for q in explicit_qty_unique[:4]))
+        for field, label in (("width_m","กว้าง"),("length_m","ยาว"),("height_m","สูง"),("member_length_m","ความยาวสมาชิก"),("area_m2","พื้นที่")):
+            vals=[safe_num(g.get(field,0)) for g in group if safe_num(g.get(field,0))>0]
+            unique=[]
+            for v in vals:
+                if not any(abs(v-u)<0.005 for u in unique): unique.append(v)
+            if unique:
+                merged[field]=round(unique[0],4)
+            if len(unique)>1:
+                conflicts.append(f"{label}: {', '.join(f'{u:.3f}' for u in unique[:4])}")
+
+        merged_rebar=[]; seen_rb=set()
+        for g in group:
+            for r in g.get("rebar_rows", []):
+                k=(r.get("pos"),r.get("type"),r.get("mode"),round(safe_num(r.get("val")),6))
+                if k not in seen_rb:
+                    merged_rebar.append(copy.deepcopy(r)); seen_rb.add(k)
+        merged["rebar_rows"]=merged_rebar
+
+        merged_steel=[]
+        for g in group:
+            for stl in g.get("steel_profiles", []):
+                if stl not in merged_steel: merged_steel.append(stl)
+        merged["steel_profiles"]=merged_steel
+
+        merged["level_hints"]=list(dict.fromkeys(g.get("level_hint","") for g in group if g.get("level_hint")))
+        merged["evidence"]={k:any(bool(g.get("evidence",{}).get(k)) for g in group) for k in ("ขนาด","ความยาว/สูง","จำนวน","เหล็ก","โครงเหล็ก")}
+        merged["source"]=" ; ".join(dict.fromkeys(str(g.get("source", "")) for g in group if g.get("source")))
+        merged["source_text"]="\n--- จุด/หน้าที่พบ ---\n".join(str(g.get("source_text", ""))[:550] for g in group)[:4500]
+        merged["bbox"]=base.get("bbox")
+        merged["confidence"]=round(min(0.96, max(g.get("confidence",0) for g in group) + (0.03 if len(group)>1 else 0)),2)
+        merged["needs_review"]=True
+        merged["conflicts"]=conflicts
+        out.append(merged)
+
+    return sorted(out, key=lambda c: (c.get("target",""), c.get("mark","")))
+
+def merge_rebar_rows(rows_a, rows_b):
+    out=[]; seen=set()
+    for r in list(rows_a or []) + list(rows_b or []):
+        k=(r.get("pos"),r.get("type"),r.get("mode"),round(safe_num(r.get("val")),6))
+        if k not in seen:
+            out.append(copy.deepcopy(r)); seen.add(k)
+    return out
+
+
 def read_drawing_pdf(file_bytes, use_ocr=True, max_pages=80, dpi=160):
+    """อ่าน PDF แบบโครงสร้าง โดยใช้ native text ถ้ามี และ spatial OCR สำหรับ PDF สแกน"""
     if fitz is None:
         raise RuntimeError("ยังไม่มี PyMuPDF (fitz) สำหรับอ่าน PDF")
-    doc=fitz.open(stream=file_bytes,filetype="pdf")
-    page_texts=[]; page_blocks=[]; ocr_pages=[]; ocr_languages=[]
-    for idx in range(min(len(doc),int(max_pages))):
-        page=doc.load_page(idx)
-        native_text=normalize_drawing_text(page.get_text("text",sort=True) or "")
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    page_texts = []
+    page_blocks = []
+    ocr_pages = []
+    ocr_languages = []
+
+    for idx in range(min(len(doc), int(max_pages))):
+        page = doc.load_page(idx)
+        native_text = normalize_drawing_text(page.get_text("text", sort=True) or "")
         try:
-            blocks=page.get_text("blocks",sort=True)
+            blocks = page.get_text("blocks", sort=True)
         except Exception:
-            blocks=[]
-        text=native_text
-        should_ocr=use_ocr and pytesseract is not None and Image is not None and (
-            len(re.sub(r"\s+","",native_text))<40 or drawing_text_quality_score(native_text)<8
+            blocks = []
+
+        text = native_text
+        # PDF สแกนของแบบก่อสร้างมักมี native text = 0 ตัวอักษร
+        should_ocr = use_ocr and pytesseract is not None and Image is not None and (
+            len(re.sub(r"\s+", "", native_text)) < 80 or
+            drawing_text_quality_score(native_text) < 10
         )
+
         if should_ocr:
             try:
-                scale=max(1.0,dpi/72.0); pix=page.get_pixmap(matrix=fitz.Matrix(scale,scale),alpha=False)
-                img=Image.frombytes("RGB",[pix.width,pix.height],pix.samples)
-                try: langs=pytesseract.get_languages(config="")
-                except Exception: langs=[]
-                lang="tha+eng" if "tha" in langs and "eng" in langs else ("tha" if "tha" in langs else "eng")
+                scale = max(1.0, dpi / 72.0)
+                pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+                try:
+                    langs = pytesseract.get_languages(config="")
+                except Exception:
+                    langs = []
+                lang = "tha+eng" if "tha" in langs and "eng" in langs else ("tha" if "tha" in langs else "eng")
                 ocr_languages.append(lang)
-                ocr_text=normalize_drawing_text(pytesseract.image_to_string(img,lang=lang,config="--psm 11"))
-                if drawing_text_quality_score(ocr_text)<drawing_text_quality_score(native_text):
-                    retry=normalize_drawing_text(pytesseract.image_to_string(img,lang=lang,config="--psm 6"))
-                    if drawing_text_quality_score(retry)>drawing_text_quality_score(ocr_text): ocr_text=retry
-                if drawing_text_quality_score(ocr_text)>drawing_text_quality_score(native_text): text=ocr_text
-                elif native_text.strip(): text=native_text
-                else: text=ocr_text
-                ocr_pages.append(idx+1)
+
+                # Spatial OCR เป็นหลัก
+                ocr_blocks, ocr_text = ocr_image_to_blocks(img, lang=lang, psm=11)
+
+                # ถ้า OCR ไม่เจอรหัสโครงสร้างเลย ลอง PSM 6 ซึ่งเหมาะกับแบบที่เป็นกล่อง/รายละเอียด
+                has_structural_mark = bool(STRUCTURAL_MARK_RE.search(ocr_text) or STRUCTURAL_DASH_MARK_RE.search(ocr_text))
+                if len(re.sub(r"\s+", "", ocr_text)) < 40 or not has_structural_mark:
+                    retry_blocks, retry_text = ocr_image_to_blocks(img, lang=lang, psm=6)
+                    if drawing_text_quality_score(retry_text) > drawing_text_quality_score(ocr_text):
+                        ocr_blocks, ocr_text = retry_blocks, retry_text
+
+                if drawing_text_quality_score(ocr_text) >= drawing_text_quality_score(native_text):
+                    text = ocr_text
+                    # ใช้บล็อก OCR ที่มีพิกัดแทน native blocks ที่ว่างจาก PDF สแกน
+                    blocks = ocr_blocks if ocr_blocks else blocks
+
+                ocr_pages.append(idx + 1)
             except Exception:
+                # ถ้า OCR ล้มเหลว ให้กลับไปใช้ native text
                 pass
-        page_texts.append(text);page_blocks.append(blocks)
-    candidates=[]
-    for page_no,(text,blocks) in enumerate(zip(page_texts,page_blocks),start=1):
+
+        page_texts.append(text)
+        page_blocks.append(blocks)
+
+    candidates = []
+    for page_no, (text, blocks) in enumerate(zip(page_texts, page_blocks), start=1):
         if not text.strip():
             continue
-        # ใช้ทั้ง spatial blocks และข้อความทั้งหน้า แล้วคัดตัวที่มีหลักฐานมากกว่า
-        if blocks:
-            candidates.extend(parse_drawing_candidates(text,page_no,blocks=blocks))
-        else:
-            candidates.extend(parse_drawing_candidates(text,page_no,blocks=None))
-    page_count=len(doc);doc.close()
-    return {"page_count":page_count,"pages_read":len(page_texts),"ocr_pages":ocr_pages,"ocr_languages":list(dict.fromkeys(ocr_languages)),"ocr_available":pytesseract is not None and Image is not None,"candidates":candidates,"reader_mode":"ข้อความใน PDF + OCR เฉพาะหน้าที่จำเป็น"}
+        page_candidates = parse_drawing_candidates(text, page_no, blocks=blocks if blocks else None)
+        # สำหรับ OCR image: ตรวจซ้ำเฉพาะ candidate ที่ขาดขนาด/เหล็ก เพื่อเชื่อมข้อมูลที่อยู่คนละบรรทัด
+        candidates.extend(page_candidates)
+
+    # OCR ซ้ำเฉพาะบริเวณ candidate ที่ยังขาดข้อมูล แล้วผสานเข้ากับ candidate เดิม
+    if use_ocr and pytesseract is not None and Image is not None:
+        by_page={}
+        for c in candidates:
+            by_page.setdefault(int(c.get("page",0)), []).append(c)
+        doc2 = fitz.open(stream=file_bytes, filetype="pdf")
+        for page_no, page_cands in by_page.items():
+            if page_no < 1 or page_no > len(doc2):
+                continue
+            needy=[]
+            seen_needy=set()
+            for c in page_cands:
+                if c.get("evidence",{}).get("ขนาด") and c.get("evidence",{}).get("เหล็ก"):
+                    continue
+                nk=(str(c.get("mark","" )).upper(), str(c.get("target","")))
+                if nk in seen_needy:
+                    continue
+                seen_needy.add(nk)
+                needy.append(c)
+            # อ่านซ้ำไม่เกิน 4 รหัส/หน้า เพื่อลดเวลารอ โดยไม่ยิง OCR ซ้ำกับ C1 หลายตำแหน่ง
+            needy=needy[:4]
+            if not needy:
+                continue
+            try:
+                page=doc2.load_page(page_no-1)
+                pix=page.get_pixmap(matrix=fitz.Matrix(160/72,160/72),alpha=False)
+                img=Image.frombytes("RGB",[pix.width,pix.height],pix.samples)
+                page_lang = ocr_languages[-1] if ocr_languages else "eng"
+                for c in needy:
+                    bbox=c.get("bbox")
+                    local=_ocr_local_context(img,bbox,lang=page_lang) if bbox else ""
+                    if not local:
+                        continue
+                    # parse local context using a synthetic one-block candidate
+                    local_cands=parse_drawing_candidates(local,page_no,blocks=None)
+                    same=[x for x in local_cands if x.get("mark")==c.get("mark") and x.get("target")==c.get("target")]
+                    if not same:
+                        continue
+                    best=max(same,key=lambda x:(sum(bool(v) for v in x.get("evidence",{}).values()),x.get("confidence",0)))
+                    for field in ("width_m","length_m","height_m","member_length_m","area_m2"):
+                        if safe_num(best.get(field,0))>0 and safe_num(c.get(field,0))<=0:
+                            c[field]=best[field]
+                    if best.get("rebar_rows"):
+                        c["rebar_rows"]=merge_rebar_rows(c.get("rebar_rows",[]),best.get("rebar_rows",[]))
+                    if best.get("steel_profiles"):
+                        c["steel_profiles"]=list(dict.fromkeys(c.get("steel_profiles",[])+best.get("steel_profiles",[])))
+                    c["source_text"]=(str(c.get("source_text",""))+"\n[OCR เฉพาะบริเวณ]\n"+local[:900])[:4500]
+                    c["evidence"]={
+                        "ขนาด":bool(c.get("width_m") or c.get("length_m") or c.get("height_m")),
+                        "ความยาว/สูง":bool(c.get("member_length_m") or c.get("height_m")),
+                        "จำนวน":bool(c.get("qty_is_explicit")),
+                        "เหล็ก":bool(c.get("rebar_rows")),
+                        "โครงเหล็ก":bool(c.get("steel_profiles"))
+                    }
+            except Exception:
+                continue
+        doc2.close()
+
+    # รวมรหัสเดียวกันข้ามหน้า แต่ไม่เอาจำนวนครั้งที่พบไปนับเป็นจำนวนสมาชิกจริง
+    candidates = merge_drawing_candidates(candidates)
+
+    page_count = len(doc)
+    doc.close()
+    return {
+        "page_count": page_count,
+        "pages_read": len(page_texts),
+        "ocr_pages": ocr_pages,
+        "ocr_languages": list(dict.fromkeys(ocr_languages)),
+        "ocr_available": pytesseract is not None and Image is not None,
+        "candidates": candidates,
+        "reader_mode": "Native PDF + Spatial OCR + OCR เฉพาะบริเวณ + รวมรหัสซ้ำข้ามหน้า",
+    }
 
 def candidate_summary(c):
     dims = ""
@@ -727,9 +1008,13 @@ def candidate_summary(c):
         dims = f"ยาว {c['member_length_m']:.2f} ม."
     elif c.get("area_m2"):
         dims = f"พื้นที่ {c['area_m2']:.2f} ตร.ม."
-    rb = ", ".join((f"{r['val']:.0f} {r['type']}" if r["mode"].startswith("จำนวน") else f"{r['type']} @{r['val']:.2f} ม.") for r in c.get("rebar_rows", []))
+    rb = ", ".join(
+        (f"{r['val']:.0f} {r['type']}" if r["mode"].startswith("จำนวน")
+         else f"{r['type']} @{r['val']*1000:.0f} มม.")
+        for r in c.get("rebar_rows", [])
+    )
     steel = ", ".join(c.get("steel_profiles", []))
-    return dims or "ยังอ่านขนาดไม่ได้", rb or "ยังอ่านเหล็กไม่ได้", steel or "ยังไม่พบหน้าตัดโครงเหล็ก"
+    return dims or "ยังอ่านขนาดไม่ได้", rb or "ยังอ่านเหล็กไม่ได้", steel or "ยังไม่พบขนาดเหล็กรูปพรรณ"
 
 def drawing_source_tags(context, page_no, mark):
     sheets = _sheet_tags_from_context(context, page_no)
@@ -762,8 +1047,8 @@ def maybe_apply_drawing_prefill(target):
     if not cand or cand.get("target") != target:
         return
     dims, rb, steel = candidate_summary(cand)
-    st.info(f"📖 มีข้อมูลจากแบบพร้อมใช้ใน Tab {target}: **{cand.get('mark')}** | {dims} | เหล็ก: {rb} | โครงเหล็ก: {steel}\n\nกด ‘ใช้ข้อมูลจากแบบ’ เพื่อเติมช่องให้ก่อน แล้วตรวจความถูกต้องอีกครั้ง")
-    if st.button(f"✅ ใช้ข้อมูลจากแบบ → {target}", key=f"apply_drawing_{target}"):
+    st.info(f"📖 พบข้อมูลจากแบบสำหรับ **{cand.get('mark')}** → งาน{target}\n{dims} | เหล็ก: {rb} | เหล็กรูปพรรณ: {steel}\n\nกดปุ่มด้านล่างเพื่อเติมข้อมูลลงแบบฟอร์ม แล้วตรวจตัวเลขกับแบบจริงอีกครั้ง")
+    if st.button(f"✅ ใช้ข้อมูลนี้กรอกงาน{target}", key=f"apply_drawing_{target}"):
         mapping = {}
         if target == "ฐานราก":
             mapping = {"f_name": cand.get("mark", "F1"), "f_qty": int(round(cand.get("qty", 1) or 1)), "f_ref": cand.get("source", "")}
@@ -781,7 +1066,7 @@ def maybe_apply_drawing_prefill(target):
             if safe_num(cand.get("length_m")) > 0: mapping["col_l"] = cand.get("length_m")
             col_height = cand.get("height_m") or cand.get("member_length_m")
             if safe_num(col_height) > 0: mapping["col_h"] = col_height
-            hint = cand.get("level_hint", "")
+            hint = cand.get("level_hint", "") or ((cand.get("level_hints") or [""])[0])
             if "ชั้น 1" in hint or "floor 1" in hint.lower(): mapping["col_level"] = "เสาชั้น 1"
             elif "ชั้น 2" in hint or "floor 2" in hint.lower(): mapping["col_level"] = "เสาชั้น 2"
             elif "ชั้น 3" in hint or "floor 3" in hint.lower(): mapping["col_level"] = "เสาชั้น 3"
@@ -795,7 +1080,7 @@ def maybe_apply_drawing_prefill(target):
             if safe_num(cand.get("width_m")) > 0: mapping["b_w"] = cand.get("width_m")
             if safe_num(cand.get("height_m")) > 0: mapping["b_h"] = cand.get("height_m")
             if safe_num(cand.get("member_length_m")) > 0: mapping["b_l"] = cand.get("member_length_m")
-            hint = cand.get("level_hint", "")
+            hint = cand.get("level_hint", "") or ((cand.get("level_hints") or [""])[0])
             if "ชั้น 1" in hint or "floor 1" in hint.lower(): mapping["beam_level"] = "คานชั้น 1 (B1)"
             elif "ชั้น 2" in hint or "floor 2" in hint.lower(): mapping["beam_level"] = "คานชั้น 2 (B2)"
             elif "ชั้น 3" in hint or "floor 3" in hint.lower(): mapping["beam_level"] = "คานชั้น 3 (B3)"
@@ -1061,6 +1346,8 @@ if "drawing_candidates" not in st.session_state:
     st.session_state["drawing_candidates"] = []
 if "drawing_pdf_name" not in st.session_state:
     st.session_state["drawing_pdf_name"] = ""
+if "drawing_pdf_hash" not in st.session_state:
+    st.session_state["drawing_pdf_hash"] = ""
 if "drawing_reader_result" not in st.session_state:
     st.session_state["drawing_reader_result"] = None
 if "drawing_prefill" not in st.session_state:
@@ -1131,6 +1418,43 @@ def add_takeoff_item(item_data, allow_duplicate=False):
     return True
 
 
+def add_takeoff_items_atomic(items, allow_duplicate=False):
+    """บันทึกหลายรายการพร้อมกัน: ถ้าพบรายการซ้ำ จะไม่บันทึกบางส่วนค้างไว้"""
+    p_idx = get_current_project_index()
+    if p_idx == -1:
+        st.error("⚠ กรุณาสร้างหรือเลือกโครงการก่อนบันทึกข้อมูล")
+        return False
+    pending = None
+    reason = ""
+    for item_data in items or []:
+        item = dict(item_data)
+        exact = find_duplicate_item(item)
+        near = find_near_duplicate_items(item)
+        if not allow_duplicate and exact is not None:
+            pending = item
+            reason = f"พบรายการซ้ำ: {item.get('รายการ', 'ไม่ระบุ')}"
+            if get_item_source(item):
+                reason += f" | อ้างอิง {get_item_source(item)}"
+            break
+        if not allow_duplicate and near and exact is None:
+            pending = item
+            reason = f"พบรายการที่อาจซ้ำ: {item.get('รายการ', 'ไม่ระบุ')}"
+            if get_item_source(item):
+                reason += f" | อ้างอิง {get_item_source(item)}"
+            break
+    if pending is not None:
+        st.session_state["pending_duplicate_item"] = copy.deepcopy(pending)
+        st.session_state["pending_duplicate_project_id"] = st.session_state["projects"][p_idx].get("id")
+        st.session_state["pending_duplicate_reason"] = reason
+        st.warning("⚠️ พบรายการซ้ำ/อาจซ้ำ — ระบบยังไม่บันทึกรายการชุดนี้ เพื่อป้องกันข้อมูลบางส่วนถูกบันทึกค้าง")
+        return False
+    for item_data in items or []:
+        # จุดนี้ผ่านการตรวจซ้ำแล้ว จึงบันทึกได้โดยไม่ต้องตรวจซ้ำรอบสอง
+        if not add_takeoff_item(item_data, allow_duplicate=True):
+            return False
+    return True
+
+
 def render_pending_duplicate_confirmation():
     pending = st.session_state.get("pending_duplicate_item")
     if not pending:
@@ -1164,10 +1488,7 @@ def rebar_save_guard(rows, key, label):
     return st.checkbox("ยืนยันว่าตอนนี้ยังไม่ระบุเหล็กจากแบบ", value=False, key=key,
                        help="ใช้เมื่อต้องการบันทึกปริมาณคอนกรีต/ไม้แบบก่อน แล้วค่อยกลับมาเติมเหล็กภายหลัง")
 
-# ราคาตั้งต้นตามขนาดเหล็กเส้น: ค่าเฉลี่ยประเทศจาก MOC ส.ค. 2569 เมื่อมีข้อมูลตรง; ขนาดอื่นเป็นราคาอ้างอิงตลาด/ประมาณการ
-CURRENT_REBAR_PRICES.update({
-    "RB6":22.36, "RB9":21.32, "DB10":21.00, "DB12":20.65, "DB16":20.54,
-    "DB20":20.77, "DB25":21.00, "DB28":21.00, "DB32":21.00})
+# ราคาเริ่มต้นของเหล็กเส้นถูกกำหนดไว้ตั้งแต่ต้นโปรแกรม เพื่อไม่ให้ทับค่าที่ผู้ใช้แก้ใน Sidebar
 
 # ราคาเริ่มต้นสำหรับตารางประเภทงานสถาปัตย์ (แก้ได้ในตารางด้านล่าง)
 p_brick_red = 180.0
@@ -1237,6 +1558,15 @@ with st.sidebar:
         labour_pile_press = st.number_input("ค่าแรงกด/ตอกเข็ม (บาท/ม.)", min_value=0.0, value=80.0, step=5.0)
         labour_pile_bored = st.number_input("ค่าแรงเจาะเสาเข็ม (บาท/ม.)", min_value=0.0, value=250.0, step=10.0)
 
+    # ราคาที่ใช้คำนวณเสาเข็ม = (ค่าวัสดุ/เมตร, ค่าแรง/เมตร)
+    pile_price_map = {
+        "เข็มหกเหลี่ยมกลวง": (safe_num(p_pile_hex), safe_num(labour_pile_press)),
+        "เข็ม I-18": (safe_num(p_pile_i18), safe_num(labour_pile_press)),
+        "เข็ม I-22": (safe_num(p_pile_i22), safe_num(labour_pile_press)),
+        "เข็ม I-26": (safe_num(p_pile_i26), safe_num(labour_pile_press)),
+        "เข็มเจาะ Ø0.35 ม.": (safe_num(p_pile_bored35), safe_num(labour_pile_bored)),
+    }
+
     with st.expander("🔨 ค่าแรงงานโครงสร้างทั่วไป", expanded=False):
         concrete_labor_basis = st.selectbox("ค่าแรงเทคอนกรีต", ["อาคารชั้นเดียว (ว480)", "อาคารหลายชั้น (ว480)", "กำหนดราคาเอง"], index=0, key="concrete_labor_basis", help="ว480: 421 บาท/ลบ.ม. สำหรับอาคารชั้นเดียว และ 522 บาท/ลบ.ม. สำหรับอาคารหลายชั้น")
         labour_concrete_manual = st.number_input("ราคาเทคอนกรีตที่กำหนดเอง (บาท/ลบ.ม.)", min_value=0.0, value=421.0, step=10.0, key="labour_concrete_manual")
@@ -1270,6 +1600,8 @@ with st.sidebar:
         stirrup_hook_extra_m = st.number_input("เผื่อความยาวตะขอเหล็กปลอก (ม./วง)", min_value=0.0, max_value=1.0, value=0.10, step=0.01)
         waste_roof_steel = st.number_input("เผื่อโครงเหล็กหลังคา (%)", min_value=0.0, max_value=100.0, value=5.0) / 100.0
         prevent_duplicates = st.checkbox("ป้องกันรายการ BOQ ซ้ำ", value=True, help="ระบบกันรายการซ้ำตรงกัน และเตือนรายการที่ใช้หมวด+ชื่อ+ที่มาในแบบเดียวกัน")
+
+pile_price_map = pile_price_map if isinstance(pile_price_map, dict) else {}
 
 render_pending_duplicate_confirmation()
 
@@ -1544,6 +1876,7 @@ with tabs[0]:
                         cleaned.append(p)
                     st.session_state["projects"] = cleaned
                     st.session_state["current_project_id"] = cleaned[0]["id"] if cleaned else None
+                    st.session_state["_draft_project_id"] = None
                     st.session_state["last_restore_hash"] = upload_hash
                     save_projects()
                     st.success("นำเข้าข้อมูลเรียบร้อยแล้ว!")
@@ -1583,25 +1916,32 @@ with tabs[0]:
                     st.markdown("---")
 
     st.markdown("---")
-    st.subheader("📖 ช่วยอ่านแบบ PDF → ช่วยกรอก BOQ")
-    st.info("วิธีใช้: 1) ลาก PDF → 2) กดอ่านแบบ → 3) เลือกรายการ → 4) นำไปกรอก Tab → 5) ตรวจข้อมูลเทียบแบบ → 6) กดบันทึก BOQ")
-    st.caption("หมายเหตุ: PDF ที่มีข้อความฝังอยู่จะอ่านได้ดีกว่า PDF สแกน; OCR ช่วยอ่านตัวหนังสือในภาพ แต่ไม่สามารถยืนยันเส้น/สัญลักษณ์จากแบบแทนผู้ถอดแบบได้")
-    st.caption("ระบบจะช่วยหา F1, C1, B1, S1, W1, R1, D1 และข้อมูลที่อ่านได้ แล้วส่งเป็น “ข้อมูลตั้งต้น” ให้คุณตรวจอีกครั้ง — ระบบจะไม่ถือว่าข้อมูลจาก PDF ถูกต้อง 100% และจะไม่สร้าง BOQ จาก OCR โดยอัตโนมัติ")
-    st.caption("💡 อ้างอิงจากแบบ = ข้อมูลช่วยบอกว่าเลขนั้นมาจากแผ่น/ตำแหน่งไหน ไม่ต้องกรอกเพื่อให้สูตรคำนวณทำงาน")
-    st.caption("⚠️ Reader อ่านตัวอักษรและตัวเลขที่พบใน PDF เป็นหลัก — เส้นบอกระยะ ลูกศร สัญลักษณ์ และรายละเอียดกราฟิกบางชนิดอาจอ่านไม่ครบ จึงต้องตรวจเทียบแบบจริงเสมอ")
-    pdf_file = st.file_uploader("ลาก PDF แบบมาวางที่นี่", type=["pdf"], key="drawing_pdf_upload")
+    st.subheader("📖 อ่านแบบ PDF → ช่วยกรอก BOQ")
+    st.info("ใช้งาน 4 ขั้นตอน: 1) เลือก PDF  2) กด ‘เริ่มอ่านแบบ’  3) เลือกรหัสที่ต้องการ  4) กดนำข้อมูลไปกรอก แล้วตรวจแบบจริง")
+    st.caption("ระบบอ่านตัวอักษร ตัวเลข และข้อมูลเหล็กจาก PDF เพื่อช่วยกรอก BOQ — ไม่ใช่การยืนยันแบบ 100% และจะไม่เดาค่าที่อ่านไม่ได้")
+    st.caption("💡 ‘อ้างอิงจากแบบ’ = บอกว่าข้อมูลมาจากหน้าไหน/ตำแหน่งใด เพื่อให้คุณตรวจย้อนหลังได้ง่าย")
+    st.caption("⚠️ ถ้าเป็น PDF สแกน ตัวเลขเล็ก ๆ หรือสัญลักษณ์บางอย่างอาจอ่านผิดได้ จึงควรตรวจเทียบกับแบบก่อนบันทึกทุกครั้ง")
+    pdf_file = st.file_uploader("เลือกไฟล์ PDF แบบ", type=["pdf"], key="drawing_pdf_upload")
+    current_pdf_hash = hashlib.sha256(pdf_file.getvalue()).hexdigest() if pdf_file is not None else ""
+    stored_pdf_hash = st.session_state.get("drawing_pdf_hash", "")
+    if current_pdf_hash and stored_pdf_hash and current_pdf_hash != stored_pdf_hash:
+        # เปลี่ยน PDF แล้ว ต้องไม่แสดงผล OCR จากไฟล์เก่า
+        st.session_state["drawing_reader_result"] = None
+        st.session_state["drawing_candidates"] = []
+        st.session_state["drawing_prefill"] = None
     rr1, rr2, rr3 = st.columns(3)
-    use_ocr = rr1.checkbox("ช่วยอ่านหน้า PDF ที่เป็นรูปภาพ (OCR)", value=True, key="drawing_use_ocr", help="ถ้า PDF มีข้อความอยู่แล้ว ระบบจะใช้ข้อความเดิมก่อน ไม่ OCR ซ้ำ")
-    max_pages = rr2.number_input("จำนวนหน้าสูงสุดที่อ่าน", min_value=1, max_value=200, value=80, step=10, key="drawing_max_pages")
-    run_reader = rr3.button("🔎 อ่านแบบและดึงข้อมูล", type="primary", use_container_width=True, key="btn_run_drawing_reader")
+    use_ocr = rr1.checkbox("อ่าน PDF ที่เป็นภาพด้วย OCR", value=True, key="drawing_use_ocr", help="เหมาะสำหรับแบบสแกนหรือ PDF ที่ไม่มีข้อความฝังอยู่")
+    max_pages = rr2.number_input("จำนวนหน้าสูงสุดที่จะอ่าน", min_value=1, max_value=200, value=80, step=10, key="drawing_max_pages")
+    run_reader = rr3.button("🔎 เริ่มอ่านแบบ", type="primary", use_container_width=True, key="btn_run_drawing_reader")
     if run_reader and pdf_file is not None:
         try:
-            with st.spinner("กำลังอ่าน PDF และหา C1 / B1 / S1 / F1 ที่อยู่ในแบบ..."):
+            with st.spinner("กำลังอ่านแบบและค้นหารหัส C1 / B1 / S1 / F1..."):
                 result = read_drawing_pdf(pdf_file.getvalue(), use_ocr=use_ocr, max_pages=int(max_pages))
             st.session_state["drawing_reader_result"] = result
             st.session_state["drawing_candidates"] = result.get("candidates", [])
             st.session_state["drawing_pdf_name"] = pdf_file.name
-            st.success(f"อ่าน {result['pages_read']} หน้า จากทั้งหมด {result['page_count']} หน้า | พบรายการที่ระบบอ่านได้ {len(result['candidates'])} รายการ")
+            st.session_state["drawing_pdf_hash"] = current_pdf_hash
+            st.success(f"อ่านแล้ว {result['pages_read']} จาก {result['page_count']} หน้า | พบรายการ {len(result['candidates'])} รหัส")
             if result['pages_read'] < result['page_count']:
                 st.warning(f"อ่านเฉพาะ {result['pages_read']} หน้าแรกตามที่ตั้งไว้ — ยังเหลือ {result['page_count']-result['pages_read']} หน้า")
         except Exception as e:
@@ -1613,7 +1953,9 @@ with tabs[0]:
     candidates = st.session_state.get("drawing_candidates", [])
     if result:
         if result.get("ocr_pages"):
-            st.caption("OCR ใช้ในหน้า: " + ", ".join(str(x) for x in result["ocr_pages"]))
+            st.caption("หน้าที่ใช้ OCR: " + ", ".join(str(x) for x in result["ocr_pages"]))
+        if result.get("reader_mode"):
+            st.caption("วิธีอ่าน: " + str(result["reader_mode"]))
         if result.get("ocr_available") is False and use_ocr:
             st.warning("เครื่องนี้ยังไม่มี Tesseract/Pillow ที่พร้อมใช้ — อ่านได้เฉพาะข้อความที่ฝังอยู่ใน PDF")
         if not candidates:
@@ -1629,10 +1971,14 @@ with tabs[0]:
                 if c.get("target") in ("ฐานราก","เสา","คาน","พื้น") and not evidence.get("เหล็ก"): missing.append("เหล็ก")
                 conf="ข้อมูลค่อนข้างครบ" if c["confidence"]>=0.8 else ("ข้อมูลบางส่วน" if c["confidence"]>=0.65 else "ต้องตรวจมาก")
                 review="ต้องตรวจ — " + ", ".join(missing) if missing else "ต้องตรวจเทียบแบบ"
-                rows.append({"#":idx+1,"หน้า":c["page"],"รหัส":c["mark"],"ไปที่":c["target"],"ขนาด/ความยาว":dims,"เหล็กที่อ่านได้":rb,"โครงเหล็กที่อ่านได้":steel,"ระดับข้อมูลที่อ่านได้":conf,"สถานะ":review})
+                rows.append({"#":idx+1,"หน้า":", ".join(str(p) for p in c.get("pages",[c["page"]])),"รหัส":c["mark"],"ประเภทงาน":c["target"],
+                             "พบกี่ครั้ง":int(c.get("occurrences",1)),
+                             "จำนวนที่ระบบอ่านได้":int(round(c.get("qty",1))),
+                             "ขนาด/ความยาว":dims,"เหล็กเสริม":rb,"เหล็กรูปพรรณ":steel,
+                             "ความครบถ้วน":conf,"ต้องตรวจอะไร":review})
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            options=[f"#{i+1} | หน้า {c['page']} | {c['mark']} → {c['target']}" for i,c in enumerate(candidates)]
-            sel=st.selectbox("เลือกรายการจากแบบที่ต้องการนำไปใช้", options, key="drawing_candidate_select")
+            options=[f"#{i+1} | หน้า {', '.join(str(p) for p in c.get('pages',[c['page']]))} | {c['mark']} → {c['target']}" for i,c in enumerate(candidates)]
+            sel=st.selectbox("เลือกรายการที่ต้องการใช้", options, key="drawing_candidate_select")
             sel_idx=options.index(sel) if sel in options else 0
             chosen=candidates[sel_idx]
             dims,rb,steel=candidate_summary(chosen)
@@ -1645,9 +1991,11 @@ with tabs[0]:
                 st.warning("⚠️ ระบบอ่านได้ไม่ครบ: " + ", ".join(missing) + " — ระบบจะไม่เดาค่าให้ กรุณาตรวจจากแบบก่อนใช้")
             else:
                 st.warning("🔍 ระบบอ่านข้อมูลได้หลายส่วน แต่ยังต้องตรวจเทียบกับแบบจริงก่อนบันทึก BOQ")
-            st.info(f"เลือกแล้ว: **{chosen['mark']}** | {dims} | เหล็ก: {rb} | โครงเหล็ก: {steel} | {chosen['source']}\n\n⚠️ ข้อมูลจาก PDF เป็นข้อมูลช่วยกรอก ไม่ใช่การยืนยันแบบ — ตรวจเทียบแบบจริงก่อนบันทึก BOQ ทุกครั้ง")
+            qty_note = "จำนวนนี้มีข้อความระบุไว้ในแบบ" if chosen.get("qty_is_explicit") else "ยังไม่มีจำนวนที่ระบุชัดในข้อความแบบ — กรุณานับจากแปลน/ตาราง (ระบบไม่เอาจำนวนครั้งที่ OCR พบมานับเป็นจำนวนจริง)"
+            conflict_note = (" | ⚠️ มิติหลายค่าพบต่างกัน: " + "; ".join(chosen.get("conflicts",[])[:3])) if chosen.get("conflicts") else ""
+            st.info(f"เลือกแล้ว: **{chosen['mark']}** | {dims} | เหล็ก: {rb} | เหล็กรูปพรรณ: {steel} | {chosen['source']}\n{qty_note}{conflict_note}\n\n⚠️ ข้อมูลนี้เป็น ‘ข้อมูลช่วยกรอก’ จาก PDF — ตรวจเทียบกับแบบจริงก่อนบันทึก BOQ")
             if pdf_file is not None and fitz is not None:
-                if st.button(f"👁 ดูหน้าแบบที่พบ {chosen['mark']}", key="btn_preview_drawing_page"):
+                if st.button(f"👁 ดูหน้าต้นทางของ {chosen['mark']}", key="btn_preview_drawing_page"):
                     try:
                         preview_doc=fitz.open(stream=pdf_file.getvalue(),filetype="pdf")
                         preview_page=preview_doc.load_page(max(0,int(chosen.get("page",1))-1))
@@ -1658,19 +2006,20 @@ with tabs[0]:
                         preview_doc.close()
                     except Exception as preview_exc:
                         st.warning(f"ไม่สามารถแสดงหน้าแบบได้: {preview_exc}")
-            if st.button(f"📌 นำ {chosen['mark']} ไปใช้ในงาน{chosen['target']}", key="btn_queue_drawing_candidate"):
+            if st.button(f"📌 นำข้อมูล {chosen['mark']} ไปกรอกงาน{chosen['target']}", key="btn_queue_drawing_candidate"):
                 if chosen["target"] in DRAWING_TAB_KEYS:
                     queue_drawing_candidate(chosen)
-                    st.success("ใส่ข้อมูลเข้าคิวแล้ว — ไปที่ Tab เป้าหมายและตรวจข้อมูลก่อนกดบันทึก BOQ")
+                    st.success("เตรียมข้อมูลให้แล้ว — ไปที่แท็บงานเป้าหมาย ตรวจตัวเลข แล้วค่อยกดบันทึก BOQ")
                     st.rerun()
                 else:
                     st.warning("รายการนี้ยังไม่มีเครื่องมือคำนวณอัตโนมัติใน 12 Tab — ให้ตรวจและกรอกด้วยตัวเอง")
-            with st.expander("ดูข้อความที่ระบบอ่านเจอ", expanded=False):
+            with st.expander("ดูข้อความต้นฉบับที่ระบบอ่านได้", expanded=False):
                 st.code(chosen.get("source_text", ""), language=None)
-            if st.button("🧹 ล้างผลการอ่านแบบ", key="btn_clear_drawing_reader"):
+            if st.button("🧹 ล้างผลการอ่าน", key="btn_clear_drawing_reader"):
                 st.session_state["drawing_reader_result"] = None
                 st.session_state["drawing_candidates"] = []
                 st.session_state["drawing_pdf_name"] = ""
+                st.session_state["drawing_pdf_hash"] = ""
                 st.session_state["drawing_prefill"] = None
                 st.rerun()
 
@@ -1682,35 +2031,44 @@ with tabs[1]:
     st.subheader(f"🦶 ถอดปริมาณงานฐานราก — [{active_proj_name}]")
 
     f1, f2, f3 = st.columns([1.4, 1, 1.6])
-    f_name = f1.text_input("ชื่อ/สัญลักษณ์ฐานราก", value="F1", key="f_name")
-    f_qty = f2.number_input("จำนวน (ฐาน)", min_value=1, value=1, key="f_qty")
-    f_type = f3.radio("ประเภทฐานราก", ["ฐานรากแผ่ (Shallow)", "ฐานรากมีเสาเข็ม (Piled)"], key="f_type")
+    f_name = f1.text_input("รหัสฐานราก", value="F1", key="f_name")
+    f_qty = f2.number_input("จำนวนฐาน", min_value=1, value=1, key="f_qty")
+    f_type = f3.radio("ประเภทฐานราก", ["ฐานรากแผ่ (ไม่มีเสาเข็ม)", "ฐานรากแบบมีเสาเข็ม"], key="f_type")
+
+    # ตั้งค่าเริ่มต้นให้ตัวแปรเสาเข็มมีค่าเสมอ เพื่อป้องกัน NameError เมื่อสลับประเภทฐานราก
+    pile_type = None
+    pile_len = 0.0
+    piles_per_footing = 0
     f_ref = st.text_input("อ้างอิงจากแบบ (ไม่บังคับ)", value="", key="f_ref", help="เช่น S-03 / Grid B-2 / F1 — ใช้ตรวจสอบย้อนหลัง ไม่ได้เปลี่ยนสูตรคำนวณ")
 
     m1, m2, m3, m4 = st.columns(4)
-    f_w = m1.number_input("ความกว้างฐานราก (ม.)", min_value=0.05, value=1.20, step=0.10, key="f_w")
-    f_l = m2.number_input("ความยาวฐานราก (ม.)", min_value=0.05, value=1.20, step=0.10, key="f_l")
-    f_h = m3.number_input("ความหนาฐานราก (ม.)", min_value=0.05, value=0.35, step=0.05, key="f_h")
-    f_depth = m4.number_input("ความลึกดินขุด H (ม.)", min_value=0.05, value=1.50, step=0.10, key="f_depth")
+    f_w = m1.number_input("กว้างฐาน (ม.)", min_value=0.05, value=1.20, step=0.10, key="f_w")
+    f_l = m2.number_input("ยาวฐาน (ม.)", min_value=0.05, value=1.20, step=0.10, key="f_l")
+    f_h = m3.number_input("หนาฐาน (ม.)", min_value=0.05, value=0.35, step=0.05, key="f_h")
+    f_depth = m4.number_input("ความลึกที่ขุด (ม.)", min_value=0.05, value=1.50, step=0.10, key="f_depth")
 
     ex1, ex2 = st.columns(2)
-    f_work_space = ex1.number_input("พื้นที่เผื่อทำงานรอบหลุม/ด้าน (ม.)", min_value=0.0, value=0.30, step=0.05, key="f_work_space")
-    f_form_type = ex2.selectbox("แบบหล่อด้านข้างฐานราก", ["เทชิดดิน / ไม่คิดไม้แบบข้าง", "มีไม้แบบข้างฐานราก"], key="f_form_type")
+    f_work_space = ex1.number_input("พื้นที่เผื่อรอบหลุม/ด้าน (ม.)", min_value=0.0, value=0.30, step=0.05, key="f_work_space")
+    f_form_type = ex2.selectbox("แบบหล่อข้างฐานราก", ["เทชิดดิน / ไม่คิดไม้แบบข้าง", "มีไม้แบบข้างฐานราก"], key="f_form_type")
 
-    auto_f_geo = st.checkbox("ช่วยตั้งความยาวเหล็กจากขนาดฐาน + Cover (ระยะหุ้มคอนกรีต)", value=True, key="f_auto_geo")
+    auto_f_geo = st.checkbox("ช่วยคำนวณความยาวเหล็กจากขนาดฐาน + Cover", value=True, key="f_auto_geo")
 
     if "เสาเข็ม" in f_type:
-        st.markdown("#### 📌 รายละเอียดเสาเข็ม")
+        st.markdown("#### 📌 ข้อมูลเสาเข็ม")
+        st.caption("กรอกตามแบบ: ชนิดเสาเข็ม + ความยาวต่อ 1 ต้น + จำนวนต่อ 1 ฐาน")
         pk1, pk2, pk3 = st.columns(3)
-        pile_type = pk1.selectbox("ชนิดเสาเข็ม", list(pile_price_map.keys()), key="pile_type")
-        pile_len = pk2.number_input("ความยาวเสาเข็ม/ต้น (ม.)", min_value=0.1, value=6.0, step=0.5, key="pile_len")
-        piles_per_footing = pk3.number_input("จำนวนเสาเข็ม/ฐาน (ต้น)", min_value=1, value=1, key="piles_per_footing")
+        pile_type = pk1.selectbox("ชนิดเสาเข็ม", list(pile_price_map.keys()), key="pile_type", help="เลือกให้ตรงกับแบบหรือใบเสนอราคาจริง")
+        pile_len = pk2.number_input("ความยาวต่อ 1 ต้น (ม.)", min_value=0.1, value=6.0, step=0.5, key="pile_len", help="ความยาวของเสาเข็ม 1 ต้น")
+        piles_per_footing = pk3.number_input("จำนวนต่อ 1 ฐาน (ต้น)", min_value=1, value=1, step=1, key="piles_per_footing", help="จำนวนเสาเข็มที่รองรับฐานราก 1 ฐาน")
+        total_piles_preview = int(piles_per_footing) * int(f_qty)
+        total_pile_length_preview = total_piles_preview * float(pile_len)
+        st.info(f"สรุปเสาเข็ม: {total_piles_preview:,} ต้น | ความยาวรวม {total_pile_length_preview:,.2f} ม.")
 
     st.markdown("---")
     st.markdown("#### 🔩 เหล็กเสริมฐานราก")
     if not st.session_state["footing_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มรายการเหล็ก’ หรือใช้ข้อมูลจาก Drawing Reader")
-    if st.button("➕ เพิ่มรายการเหล็ก", key="btn_add_f_rebar"):
+        st.info("ยังไม่มีเหล็กจากแบบ — ระบบจะไม่เดาเหล็กให้ | เพิ่มเองหรือใช้ข้อมูลจาก “อ่านแบบ PDF”")
+    if st.button("➕ เพิ่มเหล็กฐาน", key="btn_add_f_rebar"):
         st.session_state["footing_rebars"].append({"pos": "เหล็กวิ่งตามยาว", "type": "DB12", "mode": "จำนวน (เส้น)", "val": 10.0, "len": 1.50, "lap_mode": "ไม่มี", "lap_ends": 0})
         st.rerun()
 
@@ -1725,10 +2083,10 @@ with tabs[1]:
         c1, c2, c3, c4, c5, c6, c7 = st.columns([1.35, 1.1, 1.55, 1.1, 1.25, 1.2, 0.45])
         r["pos"] = c1.selectbox(f"แนว #{idx+1}", footing_pos_options, index=footing_pos_options.index(r.get("pos", footing_pos_options[0])) if r.get("pos", footing_pos_options[0]) in footing_pos_options else 0, key=f"f_pos_{idx}")
         r["type"] = c2.selectbox(f"เหล็ก #{idx+1}", REBAR_LIST, index=REBAR_LIST.index(r.get("type", "DB12")) if r.get("type") in REBAR_LIST else 2, key=f"f_type_{idx}")
-        r["mode"] = c3.selectbox(f"วิธีระบุเหล็ก #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r.get("mode") == "จำนวน (เส้น)" else 1, key=f"f_mode_{idx}")
-        r["val"] = c4.number_input(f"จำนวน / ระยะห่าง #{idx+1}", min_value=0.0001, value=max(0.0001, safe_num(r.get("val", 1))), key=f"f_val_{idx}")
-        r["len"] = c5.number_input(f"ความยาวเหล็ก/ช่วงนับ #{idx+1}", min_value=0.0, value=max(0.0, safe_num(r.get("len", 1.5))), key=f"f_len_{idx}")
-        r["lap_mode"] = c6.selectbox(f"วิธีเผื่อปลาย/ต่อเหล็ก #{idx+1}", ["ไม่มี", "ทาบ", "ฝาก/ฝังปลายเหล็ก"], index=["ไม่มี", "ทาบ", "ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode", "ไม่มี")), key=f"f_lapmode_{idx}")
+        r["mode"] = c3.selectbox(f"วิธีระบุ #{idx+1}", ["จำนวน (เส้น)", "ระยะห่าง (@ ม.)"], index=0 if r.get("mode") == "จำนวน (เส้น)" else 1, key=f"f_mode_{idx}")
+        r["val"] = c4.number_input(f"จำนวน / @ #{idx+1}", min_value=0.0001, value=max(0.0001, safe_num(r.get("val", 1))), key=f"f_val_{idx}")
+        r["len"] = c5.number_input(f"ความยาวต่อเส้น / ช่วง #{idx+1}", min_value=0.0, value=max(0.0, safe_num(r.get("len", 1.5))), key=f"f_len_{idx}")
+        r["lap_mode"] = c6.selectbox(f"เผื่อรอยต่อ/ปลาย #{idx+1}", ["ไม่มี", "ทาบ", "ฝาก/ฝังปลายเหล็ก"], index=["ไม่มี", "ทาบ", "ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode", "ไม่มี")), key=f"f_lapmode_{idx}")
         r["lap_ends"] = c6.number_input(f"จำนวนปลายที่เผื่อ #{idx+1}", min_value=0, max_value=2, value=int(safe_num(r.get("lap_ends", 0))), step=1, key=f"f_lapends_{idx}") if r["lap_mode"] != "ไม่มี" else 0
         if c7.button("🗑", key=f"del_f_rebar_{idx}"):
             f_rebars_to_remove.append(idx)
@@ -1746,9 +2104,13 @@ with tabs[1]:
         st.rerun()
 
     allow_empty_footing_rebar = rebar_save_guard(st.session_state["footing_rebars"], "allow_empty_footing_rebar", "ฐานราก")
-    if st.button("➕ บันทึกงานฐานราก", type="primary", key="btn_save_footing"):
+    if st.button("➕ บันทึกฐานราก", type="primary", key="btn_save_footing"):
         if not allow_empty_footing_rebar:
             st.stop()
+        if "เสาเข็ม" in f_type:
+            if not pile_type or safe_num(pile_len) <= 0 or int(piles_per_footing) <= 0:
+                st.error("ข้อมูลเสาเข็มไม่ครบ: กรุณาตรวจชนิด, ความยาวต่อ 1 ต้น และจำนวนต่อ 1 ฐาน")
+                st.stop()
         net_concrete = f_w * f_l * f_h * f_qty
         vol_concrete = with_waste(net_concrete, waste_concrete)
         net_formwork = (2 * (f_w + f_l) * f_h * f_qty) if "มีไม้แบบ" in f_form_type else 0.0
@@ -1773,25 +2135,25 @@ with tabs[1]:
             excavation_rate_used = excavation_labor_w480_rate(vol_excavation, f_depth, cost_excavation, auto_excavation_labor)
             excavation_labor_total = vol_excavation * excavation_rate_used + vol_backfill * cost_backfill
             excavation_labor_note = f"แยกงาน: ขุด {excavation_rate_used:.0f} + ถม {cost_backfill:.0f} บาท/ลบ.ม."
-        add_takeoff_item({
+        batch_items = [{
             "หมวด": "งานดินขุด-ดินถม", "รายการ": f"งานดินสำหรับฐานราก {f_name}",
             "ที่มาในแบบ": f_ref, "แหล่งข้อมูล": "จากขนาดฐาน/ระดับขุด",
             "รายละเอียด": f"หลุม {f_w:.2f}x{f_l:.2f}ม. + พื้นที่เผื่อทำงาน {f_work_space:.2f}ม./ด้าน | ลึก {f_depth:.2f}ม. | {excavation_labor_note}",
             "จำนวน": f_qty, "ดินขุด (ลบ.ม.)": round(vol_excavation,2), "ดินถม (ลบ.ม.)": round(vol_backfill,2),
             "ค่าวัสดุ (บาท)": 0.0, "ค่าแรง (บาท)": round(excavation_labor_total,2)
-        })
+        }]
 
         if "เสาเข็ม" in f_type:
-            total_piles = piles_per_footing*f_qty
-            total_pile_length = total_piles*pile_len
-            p_mat_rate,p_lab_rate = pile_price_map.get(pile_type,(0.0,0.0))
-            add_takeoff_item({
+            total_piles = int(piles_per_footing) * int(f_qty)
+            total_pile_length = total_piles * float(pile_len)
+            p_mat_rate, p_lab_rate = pile_price_map.get(pile_type, (0.0, 0.0))
+            batch_items.append({
                 "หมวด": "งานเสาเข็ม", "รายการ": f"เสาเข็มรองรับ {f_name}", "ที่มาในแบบ": f_ref, "แหล่งข้อมูล": "จากรายการเสาเข็ม",
                 "รายละเอียด": f"{pile_type} {pile_len:.1f}ม./ต้น × {total_piles} ต้น = {total_pile_length:.1f}ม.",
                 "จำนวน": total_piles, "ค่าวัสดุ (บาท)": round(total_pile_length*p_mat_rate,2), "ค่าแรง (บาท)": round(total_pile_length*p_lab_rate,2)
             })
 
-        add_takeoff_item({
+        batch_items.append({
             "หมวด": "งานฐานราก", "รายการ": f_name, "ที่มาในแบบ": f_ref, "แหล่งข้อมูล": "จากแบบโครงสร้าง",
             "รายละเอียด": f"ขนาด {f_w:.2f}x{f_l:.2f}x{f_h:.2f}ม. | Cover (ระยะหุ้มคอนกรีต) {cover_footing_mm:.0f}มม. | เหล็ก: " + ", ".join(f"{k} {v:.1f}กก." for k,v in rebar_breakdown.items()),
             "จำนวน": f_qty, "คอนกรีตสุทธิ (ลบ.ม.)": round(net_concrete,2), "คอนกรีต (ลบ.ม.)": round(vol_concrete,2),
@@ -1799,6 +2161,9 @@ with tabs[1]:
             "ไม้แบบสุทธิ (ตร.ม.)": round(net_formwork,2), "ไม้แบบ (ตร.ม.)": round(formwork,2),
             "ค่าวัสดุ (บาท)": round(mat_c,2), "ค่าแรง (บาท)": round(lab_c,2)
         })
+
+        if not add_takeoff_items_atomic(batch_items):
+            st.stop()
 
 # =========================================================
 # TAB 3: 🏛 เสา
@@ -1819,7 +2184,7 @@ with tabs[2]:
 
     st.markdown("#### 🔩 เหล็กเสริมเสา")
     if not st.session_state["column_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มเหล็กเสา’ หรือใช้ข้อมูลจาก Drawing Reader")
+        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มเหล็กเสา’ หรือใช้ข้อมูลจาก “อ่านแบบ PDF”")
     st.caption("ถ้าเป็นเหล็กปลอกและเลือก @ ให้ใส่ ‘ความยาวช่วง/เหล็ก’ เป็นความยาวของช่วงที่ใช้ระยะห่างนั้น")
     if st.button("➕ เพิ่มเหล็กเสา", key="btn_add_col_rebar"):
         st.session_state["column_rebars"].append({"pos":"เหล็กแกน","type":"DB12","mode":"จำนวน (เส้น)","val":4.0,"len":col_h,"lap_mode":"ไม่มี","lap_ends":0})
@@ -1831,10 +2196,10 @@ with tabs[2]:
         a1,a2,a3,a4,a5,a6,a7 = st.columns([1.35,1.05,1.5,1.05,1.25,1.2,0.45])
         r["pos"] = a1.selectbox(f"ตำแหน่ง #{idx+1}",col_pos_options,index=col_pos_options.index(r.get("pos","เหล็กแกน")) if r.get("pos") in col_pos_options else 0,key=f"c_pos_{idx}")
         r["type"] = a2.selectbox(f"เหล็ก #{idx+1}",REBAR_LIST,index=REBAR_LIST.index(r.get("type","DB12")) if r.get("type") in REBAR_LIST else 2,key=f"c_type_{idx}")
-        r["mode"] = a3.selectbox(f"วิธีระบุเหล็ก #{idx+1}",["จำนวน (เส้น)","ระยะห่าง (@ ม.)"],index=0 if r.get("mode")=="จำนวน (เส้น)" else 1,key=f"c_mode_{idx}")
-        r["val"] = a4.number_input(f"จำนวน / ระยะห่าง #{idx+1}",min_value=0.0001,value=max(0.0001,safe_num(r.get("val",4))),key=f"c_val_{idx}")
-        r["len"] = a5.number_input(f"ความยาวเหล็ก/ช่วงนับ #{idx+1}",min_value=0.0,value=max(0.0,safe_num(r.get("len",col_h))),key=f"c_len_{idx}")
-        r["lap_mode"] = a6.selectbox(f"วิธีเผื่อปลาย/ต่อเหล็ก #{idx+1}",["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"],index=["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode","ไม่มี")),key=f"c_lapmode_{idx}")
+        r["mode"] = a3.selectbox(f"วิธีระบุ #{idx+1}",["จำนวน (เส้น)","ระยะห่าง (@ ม.)"],index=0 if r.get("mode")=="จำนวน (เส้น)" else 1,key=f"c_mode_{idx}")
+        r["val"] = a4.number_input(f"จำนวน / @ #{idx+1}",min_value=0.0001,value=max(0.0001,safe_num(r.get("val",4))),key=f"c_val_{idx}")
+        r["len"] = a5.number_input(f"ความยาวต่อเส้น / ช่วง #{idx+1}",min_value=0.0,value=max(0.0,safe_num(r.get("len",col_h))),key=f"c_len_{idx}")
+        r["lap_mode"] = a6.selectbox(f"เผื่อรอยต่อ/ปลาย #{idx+1}",["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"],index=["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode","ไม่มี")),key=f"c_lapmode_{idx}")
         r["lap_ends"] = a6.number_input(f"จำนวนปลายที่เผื่อ #{idx+1}",min_value=0,max_value=2,value=int(safe_num(r.get("lap_ends",0))),step=1,key=f"c_lapends_{idx}") if r["lap_mode"]!="ไม่มี" else 0
         if a7.button("🗑",key=f"del_c_rebar_{idx}"): c_rebars_to_remove.append(idx)
         count_span_col = max(0.0, safe_num(r.get("len", col_h))) if "ปลอก" in str(r.get("pos", "")) and r.get("mode") != "จำนวน (เส้น)" else col_h
@@ -1884,7 +2249,7 @@ with tabs[3]:
 
     st.markdown("#### 🔩 เหล็กเสริมคาน")
     if not st.session_state["beam_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มเหล็กคาน’ หรือใช้ข้อมูลจาก Drawing Reader")
+        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มเหล็กคาน’ หรือใช้ข้อมูลจาก “อ่านแบบ PDF”")
     st.caption("ถ้าเป็นเหล็กปลอกและเลือก @ ให้ใส่ ‘ความยาวช่วง/เหล็ก’ เป็นความยาวของช่วงที่ใช้ระยะห่างนั้น")
     if st.button("➕ เพิ่มเหล็กคาน",key="btn_add_beam_rebar"):
         st.session_state["beam_rebars"].append({"pos":"เหล็กบน","type":"DB12","mode":"จำนวน (เส้น)","val":2.0,"len":beam_l,"lap_mode":"ไม่มี","lap_ends":0}); st.rerun()
@@ -1895,10 +2260,10 @@ with tabs[3]:
         a1,a2,a3,a4,a5,a6,a7=st.columns([1.35,1.05,1.5,1.05,1.25,1.2,0.45])
         r["pos"]=a1.selectbox(f"ตำแหน่ง #{idx+1}",beam_pos_options,index=beam_pos_options.index(r.get("pos","เหล็กบน")) if r.get("pos") in beam_pos_options else 0,key=f"b_pos_{idx}")
         r["type"]=a2.selectbox(f"เหล็ก #{idx+1}",REBAR_LIST,index=REBAR_LIST.index(r.get("type","DB12")) if r.get("type") in REBAR_LIST else 2,key=f"b_type_{idx}")
-        r["mode"]=a3.selectbox(f"วิธีระบุเหล็ก #{idx+1}",["จำนวน (เส้น)","ระยะห่าง (@ ม.)"],index=0 if r.get("mode")=="จำนวน (เส้น)" else 1,key=f"b_mode_{idx}")
-        r["val"]=a4.number_input(f"จำนวน / ระยะห่าง #{idx+1}",min_value=0.0001,value=max(0.0001,safe_num(r.get("val",2))),key=f"b_val_{idx}")
-        r["len"]=a5.number_input(f"ความยาวเหล็ก/ช่วงนับ #{idx+1}",min_value=0.0,value=max(0.0,safe_num(r.get("len",beam_l))),key=f"b_len_{idx}")
-        r["lap_mode"]=a6.selectbox(f"วิธีเผื่อปลาย/ต่อเหล็ก #{idx+1}",["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"],index=["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode","ไม่มี")),key=f"b_lapmode_{idx}")
+        r["mode"]=a3.selectbox(f"วิธีระบุ #{idx+1}",["จำนวน (เส้น)","ระยะห่าง (@ ม.)"],index=0 if r.get("mode")=="จำนวน (เส้น)" else 1,key=f"b_mode_{idx}")
+        r["val"]=a4.number_input(f"จำนวน / @ #{idx+1}",min_value=0.0001,value=max(0.0001,safe_num(r.get("val",2))),key=f"b_val_{idx}")
+        r["len"]=a5.number_input(f"ความยาวต่อเส้น / ช่วง #{idx+1}",min_value=0.0,value=max(0.0,safe_num(r.get("len",beam_l))),key=f"b_len_{idx}")
+        r["lap_mode"]=a6.selectbox(f"เผื่อรอยต่อ/ปลาย #{idx+1}",["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"],index=["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode","ไม่มี")),key=f"b_lapmode_{idx}")
         r["lap_ends"]=a6.number_input(f"จำนวนปลายที่เผื่อ #{idx+1}",min_value=0,max_value=2,value=int(safe_num(r.get("lap_ends",0))),step=1,key=f"b_lapends_{idx}") if r["lap_mode"]!="ไม่มี" else 0
         if a7.button("🗑",key=f"del_b_rebar_{idx}"): b_rebars_to_remove.append(idx)
         count_span_beam = max(0.0, safe_num(r.get("len", beam_l))) if "ปลอก" in str(r.get("pos", "")) and r.get("mode") != "จำนวน (เส้น)" else beam_l
@@ -1935,7 +2300,7 @@ with tabs[4]:
     maybe_apply_drawing_prefill("พื้น")
     st.subheader(f"🧱 ถอดปริมาณงานพื้น — [{active_proj_name}]")
     s1,s2=st.columns(2)
-    slab_name=s1.text_input("ชื่อ/สัญลักษณ์พื้น",value="S1",key="s_name")
+    slab_name=s1.text_input("รหัสพื้น",value="S1",key="s_name")
     slab_qty=s2.number_input("จำนวน (ผืน)",min_value=1,value=1,key="s_qty")
     slab_ref=st.text_input("อ้างอิงจากแบบ (ไม่บังคับ)",value="",key="s_ref",help="เช่น S-06 / ห้องนั่งเล่น / S1 — ใช้ตรวจสอบย้อนหลัง")
     sm1,sm2,sm3=st.columns(3)
@@ -1959,9 +2324,9 @@ with tabs[4]:
 
     st.markdown("#### 🔩 เหล็กเสริมพื้น")
     if not st.session_state["slab_rebars"]:
-        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มรายการเหล็กพื้น’ หรือใช้ข้อมูลจาก Drawing Reader")
+        st.info("ยังไม่ได้ระบุเหล็กจากแบบ — ระบบจะยังไม่เดาเหล็กให้ | กด ‘เพิ่มเหล็กพื้น’ หรือใช้ข้อมูลจาก Drawing Reader")
     st.caption("ถ้าเป็นเหล็กปลอกและเลือก @ ให้ใส่ ‘ความยาวช่วง/เหล็ก’ เป็นความยาวของช่วงที่ใช้ระยะห่างนั้น")
-    if st.button("➕ เพิ่มรายการเหล็กพื้น",key="btn_add_s_rebar"):
+    if st.button("➕ เพิ่มเหล็กพื้น",key="btn_add_s_rebar"):
         st.session_state["slab_rebars"].append({"pos":"เหล็กล่าง/ตะแกรงทางยาว","type":"RB9","mode":"ระยะห่าง (@ ม.)","val":0.20,"len":slab_l,"lap_mode":"ไม่มี","lap_ends":0});st.rerun()
     s_rebars_to_remove=[];tot_slab_rebar_weight=0.0;slab_rebar_detail={}
     slab_pos_options=["เหล็กล่าง/ตะแกรงทางยาว","เหล็กล่าง/ตะแกรงทางกว้าง","เหล็กบน/ตะแกรงทางยาว","เหล็กบน/ตะแกรงทางกว้าง","เหล็กคอมเมนท์/เหล็กเสริมพิเศษ"]
@@ -1970,10 +2335,10 @@ with tabs[4]:
         a1,a2,a3,a4,a5,a6,a7=st.columns([1.55,1.05,1.5,1.05,1.2,1.2,0.45])
         r["pos"]=a1.selectbox(f"ตำแหน่ง #{idx+1}",slab_pos_options,index=slab_pos_options.index(r.get("pos",slab_pos_options[0])) if r.get("pos") in slab_pos_options else 0,key=f"s_pos_{idx}")
         r["type"]=a2.selectbox(f"เหล็ก #{idx+1}",REBAR_LIST,index=REBAR_LIST.index(r.get("type","RB9")) if r.get("type") in REBAR_LIST else 1,key=f"s_type_{idx}")
-        r["mode"]=a3.selectbox(f"วิธีระบุเหล็ก #{idx+1}",["จำนวน (เส้น)","ระยะห่าง (@ ม.)"],index=0 if r.get("mode")=="จำนวน (เส้น)" else 1,key=f"s_mode_{idx}")
-        r["val"]=a4.number_input(f"จำนวน / ระยะห่าง #{idx+1}",min_value=0.0001,value=max(0.0001,safe_num(r.get("val",0.2))),key=f"s_val_{idx}")
-        r["len"]=a5.number_input(f"ความยาวเหล็ก/ช่วงนับ #{idx+1}",min_value=0.0,value=max(0.0,safe_num(r.get("len",slab_l))),key=f"s_len_{idx}")
-        r["lap_mode"]=a6.selectbox(f"วิธีเผื่อปลาย/ต่อเหล็ก #{idx+1}",["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"],index=["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode","ไม่มี")),key=f"s_lapmode_{idx}")
+        r["mode"]=a3.selectbox(f"วิธีระบุ #{idx+1}",["จำนวน (เส้น)","ระยะห่าง (@ ม.)"],index=0 if r.get("mode")=="จำนวน (เส้น)" else 1,key=f"s_mode_{idx}")
+        r["val"]=a4.number_input(f"จำนวน / @ #{idx+1}",min_value=0.0001,value=max(0.0001,safe_num(r.get("val",0.2))),key=f"s_val_{idx}")
+        r["len"]=a5.number_input(f"ความยาวต่อเส้น / ช่วง #{idx+1}",min_value=0.0,value=max(0.0,safe_num(r.get("len",slab_l))),key=f"s_len_{idx}")
+        r["lap_mode"]=a6.selectbox(f"เผื่อรอยต่อ/ปลาย #{idx+1}",["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"],index=["ไม่มี","ทาบ","ฝาก/ฝังปลายเหล็ก"].index(r.get("lap_mode","ไม่มี")),key=f"s_lapmode_{idx}")
         r["lap_ends"]=a6.number_input(f"จำนวนปลายที่เผื่อ #{idx+1}",min_value=0,max_value=2,value=int(safe_num(r.get("lap_ends",0))),step=1,key=f"s_lapends_{idx}") if r["lap_mode"]!="ไม่มี" else 0
         if a7.button("🗑",key=f"del_s_rebar_{idx}"):s_rebars_to_remove.append(idx)
         count_span=slab_w if "ทางยาว" in r["pos"] else slab_l
